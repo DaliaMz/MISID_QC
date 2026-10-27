@@ -12,8 +12,9 @@ matrix, between 0 and 1.}
 \item{priors}{Optional named or class-ordered class prior probabilities.}
 }
 \value{
-An object containing class means, covariance, coefficients, intercepts,
-priors, and the applied shrinkage.
+An object containing class means, coefficients, intercepts, priors, and the
+regularized covariance diagonal. A dual-space calculation avoids constructing
+a features-by-features covariance matrix.
 }
 \description{
 Fits a linear discriminant model using a pooled within-class covariance

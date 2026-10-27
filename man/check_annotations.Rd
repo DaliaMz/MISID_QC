@@ -18,8 +18,9 @@ thresholds for annotation support and unknown detection.}
 assessments based on internal validation.}
 }
 \value{
-A list with \code{predictions}, \code{performance}, \code{calibration},
-\code{feasibility}, and \code{thresholds} components.
+A list with sample-level \code{predictions}, raw \code{identity_scores},
+temperature-scaled \code{identity_probabilities}, \code{performance},
+\code{calibration}, \code{feasibility}, and \code{thresholds} components.
 }
 \description{
 Uses leave-one-sample-out shrinkage linear discriminant scores and internal

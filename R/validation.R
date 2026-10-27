@@ -12,7 +12,7 @@
     -mean(log(pmax(probabilities[cbind(seq_along(class_index), class_index)],
                    .Machine$double.xmin)))
   }
-  exp(optimize(objective, interval = c(-5, 5))$minimum)
+  exp(stats::optimize(objective, interval = c(-5, 5))$minimum)
 }
 
 .safe_divide <- function(numerator, denominator) {
@@ -35,7 +35,7 @@
     accuracy = .safe_divide(tp + tn, length(positive))
   )
   if (!is.null(score) && any(positive) && any(!positive)) {
-    ranks <- rank(score, ties.method = "average")
+    ranks <- stats::rank(score, ties.method = "average")
     result$auroc <- (sum(ranks[positive]) -
                        sum(positive) * (sum(positive) + 1) / 2) /
       (sum(positive) * sum(!positive))
@@ -51,8 +51,8 @@
 }
 
 .select_lower_threshold <- function(values, target_specificity) {
-  unname(quantile(values, probs = 1 - target_specificity, type = 1,
-                  na.rm = TRUE))
+  unname(stats::quantile(values, probs = 1 - target_specificity, type = 1,
+                         na.rm = TRUE))
 }
 
 .unknown_validation <- function(x, y, temperature, known_threshold, shrinkage,

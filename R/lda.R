@@ -5,8 +5,9 @@
 #' @param shrinkage Shrinkage fraction toward a diagonal within-class
 #'   covariance matrix, between 0 and 1.
 #' @param priors Optional named or class-ordered class prior probabilities.
-#' @return An object containing class means, covariance, coefficients,
-#'   intercepts, priors, and the applied shrinkage.
+#' @return An object containing class means, coefficients, intercepts, priors,
+#'   and the regularized covariance diagonal. A dual-space calculation avoids
+#'   constructing a features-by-features covariance matrix.
 #' @export
 fit_shrinkage_lda <- function(x, y, shrinkage = 0.1, priors = NULL) {
   x <- as.matrix(x)
@@ -38,16 +39,28 @@ fit_shrinkage_lda <- function(x, y, shrinkage = 0.1, priors = NULL) {
   }))
   rownames(means) <- classes
   residuals <- x - means[match(y, classes), , drop = FALSE]
-  covariance <- crossprod(residuals) / (nrow(x) - length(classes))
-  target <- diag(diag(covariance), nrow = ncol(x))
-  covariance <- (1 - shrinkage) * covariance + shrinkage * target
-
-  scale <- max(mean(diag(covariance)), 1)
-  diag(covariance) <- diag(covariance) + scale * 1e-8
-  inverse <- tryCatch(
-    solve(covariance),
-    error = function(e) stop("Could not regularize the within-class covariance.")
+  degrees_of_freedom <- nrow(x) - length(classes)
+  variance <- colSums(residuals^2) / degrees_of_freedom
+  regularizer <- max(mean(variance), 1) * 1e-8
+  covariance_diagonal <- shrinkage * variance + regularizer
+  coefficients_transposed <- sweep(
+    t(means), 1L, covariance_diagonal, FUN = "/"
   )
+  if (shrinkage < 1) {
+    weighted_residuals <- sweep(
+      residuals, 2L, covariance_diagonal, FUN = "/"
+    )
+    gram <- residuals %*% t(weighted_residuals)
+    middle <- tryCatch(
+      solve(diag(degrees_of_freedom / (1 - shrinkage),
+                 nrow = nrow(x)) + gram),
+      error = function(e) stop("Could not regularize the within-class covariance.")
+    )
+    coefficients_transposed <- coefficients_transposed -
+      sweep(t(residuals), 1L, covariance_diagonal, FUN = "/") %*%
+      middle %*%
+      (residuals %*% coefficients_transposed)
+  }
 
   if (is.null(priors)) {
     priors <- as.numeric(counts) / sum(counts)
@@ -63,15 +76,15 @@ fit_shrinkage_lda <- function(x, y, shrinkage = 0.1, priors = NULL) {
   }
   names(priors) <- classes
 
-  coefficients <- t(inverse %*% t(means))
-  intercepts <- -0.5 * rowSums((means %*% inverse) * means) + log(priors)
+  coefficients <- t(coefficients_transposed)
+  intercepts <- -0.5 * rowSums(coefficients * means) + log(priors)
   names(intercepts) <- classes
 
   structure(
     list(
       classes = classes,
       means = means,
-      covariance = covariance,
+      covariance_diagonal = covariance_diagonal,
       beta = coefficients,
       intercepts = intercepts,
       priors = priors,

@@ -23,9 +23,16 @@ model <- fit_shrinkage_lda(t(expression), ids, shrinkage = 0.2)
 scores <- predict_shrinkage_lda(model, t(expression))
 stopifnot(is.matrix(scores), nrow(scores) == length(ids), ncol(scores) == 3L)
 stopifnot(all(is.finite(scores)))
+stopifnot(isTRUE(all.equal(
+  unname(scores),
+  unname(t(expression) %*% t(model$beta) +
+           matrix(model$intercepts, nrow = length(ids), ncol = 3L,
+                  byrow = TRUE))
+)))
 
 result <- check_annotations(expression, metadata, "sample", "individual")
 stopifnot(nrow(result$predictions) == length(ids))
+stopifnot(identical(dim(result$identity_scores), c(length(ids), 3L)))
 stopifnot(identical(result$predictions$sample_id, samples))
 stopifnot(all(is.na(
   result$predictions$annotation_correctness_probability
@@ -33,7 +40,9 @@ stopifnot(all(is.na(
 stopifnot(all(c("misannotation_detection", "identity_recovery",
                 "unknown_individual_detection") %in%
               names(result$feasibility)))
+stopifnot("pairwise_swap_detection" %in% names(result$performance))
 stopifnot(length(result$calibration$temperature) == 1L)
+stopifnot(all(is.na(result$predictions$candidate_correction)))
 
 bad_metadata <- metadata
 bad_metadata$sample[1L] <- "not_a_sample"

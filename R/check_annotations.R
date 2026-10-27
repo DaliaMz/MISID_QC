@@ -22,8 +22,9 @@
 #'   thresholds for annotation support and unknown detection.
 #' @param assess_feasibility Whether to return task-specific feasibility
 #'   assessments based on internal validation.
-#' @return A list with `predictions`, `performance`, `calibration`,
-#'   `feasibility`, and `thresholds` components.
+#' @return A list with sample-level `predictions`, raw `identity_scores`,
+#'   temperature-scaled `identity_probabilities`, `performance`,
+#'   `calibration`, `feasibility`, and `thresholds` components.
 #' @export
 check_annotations <- function(expr, metadata, sample_col, id_col,
                               shrinkage = 0.1, target_specificity = 0.95,
@@ -125,6 +126,35 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   } else {
     NA_real_
   }
+  swap_samples <- integer()
+  swap_labels <- character()
+  for (i in seq_len(length(class_counts) - 1L)) {
+    for (j in seq.int(i + 1L, length(class_counts))) {
+      first_samples <- which(y == names(class_counts)[i])
+      second_samples <- which(y == names(class_counts)[j])
+      n_pairs <- min(length(first_samples), length(second_samples))
+      swap_samples <- c(
+        swap_samples, first_samples[seq_len(n_pairs)],
+        second_samples[seq_len(n_pairs)]
+      )
+      swap_labels <- c(
+        swap_labels, rep(names(class_counts)[j], n_pairs),
+        rep(names(class_counts)[i], n_pairs)
+      )
+    }
+  }
+  swap_support <- class_probabilities[
+    cbind(swap_samples, match(swap_labels, colnames(oof_scores)))
+  ]
+  pairwise_swap_metrics <- .binary_metrics(
+    c(rep(FALSE, length(y)), rep(TRUE, length(swap_support))),
+    c(flagged, swap_support < support_threshold),
+    c(-observed_support, -swap_support)
+  )
+  top_three <- vapply(seq_along(y), function(i) {
+    ranked <- names(sort(oof_scores[i, ], decreasing = TRUE))
+    y[i] %in% ranked[seq_len(min(3L, length(ranked)))]
+  }, logical(1))
 
   unknown <- .unknown_validation(
     x, y, temperature, unknown_threshold, shrinkage, known_max_probability
@@ -157,15 +187,21 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     suspicious = flagged,
     potential_unknown_individual = known_max_probability < unknown_threshold,
     most_likely_alternative = ifelse(
-      flagged & predicted_id != y, predicted_id, NA_character_
+      flagged & known_max_probability >= unknown_threshold & predicted_id != y,
+      predicted_id, NA_character_
     ),
     candidate_correction = NA_character_,
     stringsAsFactors = FALSE
   )
   performance <- list(
     correct_identity_recovery_accuracy = mean(correct_identity),
+    top_three_identity_recovery_accuracy = mean(top_three),
     misannotation_detection = misannotation_metrics,
     identity_recovery_accuracy = identity_recovery,
+    pairwise_swap_detection = pairwise_swap_metrics,
+    pairwise_swap_identity_recovery_accuracy = mean(
+      predicted_id[swap_samples] == y[swap_samples]
+    ),
     unknown_individual_detection = unknown$metrics,
     unknown_simulation_n = unknown$n
   )
@@ -211,25 +247,32 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     reliable_correction <- FALSE
   }
   predictions$candidate_correction <- ifelse(
-      flagged & reliable_correction & predicted_id != y,
+      flagged & reliable_correction &
+        !predictions$potential_unknown_individual & predicted_id != y,
       predicted_id,
       NA_character_
   )
   reliable_assessment <- !is.null(feasibility) &&
     feasibility$misannotation_detection == "appears_feasible"
+  reliable_unknown <- !is.null(feasibility) &&
+    feasibility$unknown_individual_detection == "appears_feasible"
   predictions$annotation_status <- ifelse(
     !reliable_assessment,
     "insufficient_evidence",
-    ifelse(predictions$potential_unknown_individual,
-           "potential_unknown_individual",
+    ifelse(predictions$potential_unknown_individual & !reliable_unknown,
+           "insufficient_evidence",
+           ifelse(predictions$potential_unknown_individual,
+                  "potential_unknown_individual",
            ifelse(!flagged, "no_evidence_of_incorrect_annotation",
                   ifelse(!is.na(predictions$candidate_correction),
                          "suspicious_with_candidate_correction",
-                         "suspicious_without_reliable_alternative")))
+                         "suspicious_without_reliable_alternative"))))
   )
 
   list(
     predictions = predictions,
+    identity_scores = oof_scores,
+    identity_probabilities = class_probabilities,
     performance = performance,
     calibration = calibration,
     feasibility = feasibility,

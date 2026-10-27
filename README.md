@@ -20,6 +20,7 @@ results <- SampleAnnotationLikelihood::check_annotations(
 )
 
 results$predictions
+results$identity_scores
 results$performance
 results$feasibility
 ```
@@ -30,6 +31,9 @@ are **not** annotation-correctness probabilities: no absolute probability
 that a sample is correctly annotated is reported because the true error
 prevalence is unknown. Internal artificial relabeling and leave-one-individual-
 out experiments provide exploratory, dataset-specific performance summaries.
+Relabeling metrics include all wrong candidate identities and pairwise swaps;
+precision therefore reflects those artificial scenarios, not a population error
+prevalence.
 Threshold selection and performance use the same out-of-fold predictions, so
 these summaries are not independent estimates and should not be used as
 confirmed error rates. Candidate corrections are emitted only when both
