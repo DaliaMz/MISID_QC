@@ -1,0 +1,3 @@
+export(check_annotations)
+export(fit_shrinkage_lda)
+export(predict_shrinkage_lda)
