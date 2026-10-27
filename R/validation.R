@@ -35,7 +35,7 @@
     accuracy = .safe_divide(tp + tn, length(positive))
   )
   if (!is.null(score) && any(positive) && any(!positive)) {
-    ranks <- stats::rank(score, ties.method = "average")
+    ranks <- rank(score, ties.method = "average")
     result$auroc <- (sum(ranks[positive]) -
                        sum(positive) * (sum(positive) + 1) / 2) /
       (sum(positive) * sum(!positive))
@@ -56,9 +56,12 @@
 }
 
 .unknown_validation <- function(x, y, temperature, known_threshold, shrinkage,
-                                known_confidence) {
+                                known_confidence, progress = FALSE) {
   classes <- sort(unique(y))
   if (length(classes) < 3L) {
+    if (isTRUE(progress)) {
+      message("Skipping held-out-individual validation: at least three individuals are needed.")
+    }
     return(list(
       metrics = NULL,
       threshold = NA_real_,
@@ -66,8 +69,14 @@
       status = "insufficient_evidence"
     ))
   }
+  if (isTRUE(progress)) {
+    message(sprintf("Validating held-out individuals across %d individuals.",
+                    length(classes)))
+  }
   unknown_confidence <- numeric()
-  for (held_out in classes) {
+  individual_progress_interval <- max(1L, ceiling(length(classes) / 10L))
+  for (i in seq_along(classes)) {
+    held_out <- classes[i]
     train <- y != held_out
     test <- !train
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
@@ -75,6 +84,11 @@
     scores <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
     confidence <- apply(.softmax_scores(scores, temperature), 1L, max)
     unknown_confidence <- c(unknown_confidence, confidence)
+    if (isTRUE(progress) &&
+        (i %% individual_progress_interval == 0L || i == length(classes))) {
+      message(sprintf("Held-out-individual validation: %d/%d individuals.",
+                      i, length(classes)))
+    }
   }
   confidence <- c(known_confidence, unknown_confidence)
   positive <- c(rep(FALSE, length(known_confidence)),

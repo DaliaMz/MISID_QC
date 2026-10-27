@@ -22,13 +22,20 @@
 #'   thresholds for annotation support and unknown detection.
 #' @param assess_feasibility Whether to return task-specific feasibility
 #'   assessments based on internal validation.
+#' @param progress Whether to report progress updates. Defaults to `TRUE` in
+#'   interactive sessions and `FALSE` otherwise.
+#' @param cv_folds `NULL` (default) uses leave-one-sample-out validation;
+#'   otherwise, an integer from 2 to the smallest individual sample count
+#'   selects the number of stratified cross-validation folds. Fold assignment
+#'   is randomized; call `set.seed()` beforehand for reproducible results.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
 #'   temperature-scaled `identity_probabilities`, `performance`,
 #'   `calibration`, `feasibility`, and `thresholds` components.
 #' @export
 check_annotations <- function(expr, metadata, sample_col, id_col,
                               shrinkage = 0.1, target_specificity = 0.95,
-                              assess_feasibility = TRUE) {
+                              assess_feasibility = TRUE,
+                              progress = interactive(), cv_folds = NULL) {
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -64,6 +71,16 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       target_specificity <= 0 || target_specificity >= 1) {
     stop("target_specificity must be a single number between 0 and 1.")
   }
+  if (!is.null(cv_folds) &&
+      (!is.numeric(cv_folds) || is.complex(cv_folds) ||
+       length(cv_folds) != 1L || !is.finite(cv_folds) ||
+       cv_folds != floor(cv_folds) || cv_folds < 2L ||
+       cv_folds > min(class_counts))) {
+    stop("cv_folds must be NULL or an integer from 2 to the smallest individual sample count.")
+  }
+  if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+    stop("progress must be TRUE or FALSE.")
+  }
 
   x <- t(expr)
   rownames(x) <- colnames(expr)
@@ -71,15 +88,51 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     NA_real_, nrow = nrow(x), ncol = length(class_counts),
     dimnames = list(rownames(x), names(class_counts))
   )
-  for (i in seq_len(nrow(x))) {
-    train <- seq_len(nrow(x)) != i
+  n_folds <- if (is.null(cv_folds)) nrow(x) else as.integer(cv_folds)
+  fold_id <- if (is.null(cv_folds)) {
+    seq_len(nrow(x))
+  } else {
+    sample_folds <- integer(nrow(x))
+    for (individual in names(class_counts)) {
+      individual_samples <- which(y == individual)
+      sample_folds[individual_samples] <- sample(rep(
+        seq_len(n_folds), length.out = length(individual_samples)
+      ))
+    }
+    sample_folds
+  }
+  if (isTRUE(progress)) {
+    if (is.null(cv_folds)) {
+      message(sprintf("Fitting leave-one-sample-out models for %d samples.",
+                      nrow(x)))
+    } else {
+      message(sprintf("Fitting stratified %d-fold CV for %d samples.",
+                      n_folds, nrow(x)))
+    }
+  }
+  fold_progress_interval <- max(1L, ceiling(n_folds / 10L))
+  for (fold in seq_len(n_folds)) {
+    test <- which(fold_id == fold)
+    train <- fold_id != fold
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                                shrinkage = shrinkage)
-    oof_scores[i, ] <- predict_shrinkage_lda(
-      model, x[i, , drop = FALSE]
-    )[1L, ]
+    oof_scores[test, ] <- predict_shrinkage_lda(
+      model, x[test, , drop = FALSE]
+    )
+    if (isTRUE(progress) &&
+        (fold %% fold_progress_interval == 0L || fold == n_folds)) {
+      if (is.null(cv_folds)) {
+        message(sprintf("Leave-one-sample-out models: %d/%d samples.",
+                        fold, n_folds))
+      } else {
+        message(sprintf("Cross-validation folds: %d/%d.", fold, n_folds))
+      }
+    }
   }
 
+  if (isTRUE(progress)) {
+    message("Calibrating identity scores and summarizing validation metrics.")
+  }
   temperature <- .fit_temperature(oof_scores, y)
   class_probabilities <- .softmax_scores(oof_scores, temperature)
   class_index <- match(y, colnames(oof_scores))
@@ -157,7 +210,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }, logical(1))
 
   unknown <- .unknown_validation(
-    x, y, temperature, unknown_threshold, shrinkage, known_max_probability
+    x, y, temperature, unknown_threshold, shrinkage, known_max_probability,
+    progress = progress
   )
   calibration <- list(
     method = "temperature_scaling",

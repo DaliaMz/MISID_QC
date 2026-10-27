@@ -3,7 +3,8 @@
 \title{Assess repeated-measures RNA-seq sample annotations}
 \usage{
 check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
-  target_specificity = 0.95, assess_feasibility = TRUE)
+  target_specificity = 0.95, assess_feasibility = TRUE,
+  progress = interactive(), cv_folds = NULL)
 }
 \arguments{
 \item{expr}{Numeric expression matrix, features by samples, with unique
@@ -16,6 +17,12 @@ sample names in \code{colnames(expr)}.}
 thresholds for annotation support and unknown detection.}
 \item{assess_feasibility}{Whether to return task-specific feasibility
 assessments based on internal validation.}
+\item{progress}{Whether to report progress updates. Defaults to \code{TRUE}
+in interactive sessions and \code{FALSE} otherwise.}
+\item{cv_folds}{\code{NULL} (default) uses leave-one-sample-out validation;
+otherwise, an integer from 2 to the smallest individual sample count selects
+the number of stratified cross-validation folds. Fold assignment is
+randomized; call \code{set.seed()} beforehand for reproducible results.}
 }
 \value{
 A list with sample-level \code{predictions}, raw \code{identity_scores},

@@ -30,7 +30,18 @@ stopifnot(isTRUE(all.equal(
                   byrow = TRUE))
 )))
 
-result <- check_annotations(expression, metadata, "sample", "individual")
+progress_messages <- character()
+withCallingHandlers(
+  result <- check_annotations(expression, metadata, "sample", "individual",
+                              progress = TRUE),
+  message = function(condition) {
+    progress_messages <<- c(progress_messages, conditionMessage(condition))
+    invokeRestart("muffleMessage")
+  }
+)
+stopifnot(any(grepl("Leave-one-sample-out models", progress_messages)))
+stopifnot(any(grepl("held-out individuals", progress_messages,
+                    ignore.case = TRUE)))
 stopifnot(nrow(result$predictions) == length(ids))
 stopifnot(identical(dim(result$identity_scores), c(length(ids), 3L)))
 stopifnot(identical(result$predictions$sample_id, samples))
@@ -43,6 +54,26 @@ stopifnot(all(c("misannotation_detection", "identity_recovery",
 stopifnot("pairwise_swap_detection" %in% names(result$performance))
 stopifnot(length(result$calibration$temperature) == 1L)
 stopifnot(all(is.na(result$predictions$candidate_correction)))
+
+cv_progress_messages <- character()
+withCallingHandlers(
+  cv_result <- check_annotations(expression, metadata, "sample", "individual",
+                                 cv_folds = 3L, progress = TRUE),
+  message = function(condition) {
+    cv_progress_messages <<- c(cv_progress_messages,
+                               conditionMessage(condition))
+    invokeRestart("muffleMessage")
+  }
+)
+stopifnot(any(grepl("stratified 3-fold CV", cv_progress_messages)))
+stopifnot(any(grepl("Cross-validation folds: 3/3", cv_progress_messages)))
+stopifnot(identical(dim(cv_result$identity_scores), c(length(ids), 3L)))
+stopifnot(all(is.finite(cv_result$identity_scores)))
+stopifnot(inherits(
+  try(check_annotations(expression, metadata, "sample", "individual",
+                         cv_folds = 5L), silent = TRUE),
+  "try-error"
+))
 
 bad_metadata <- metadata
 bad_metadata$sample[1L] <- "not_a_sample"
