@@ -1,0 +1,10 @@
+Package: SampleAnnotationLikelihood
+Title: Dataset-Specific RNA-Seq Sample Annotation Quality Control
+Version: 0.1.0
+Authors@R: person("Dalia", "Mz", role = c("aut", "cre"))
+Description: Scores repeated-measures RNA-seq samples against candidate
+    individual identities using shrinkage linear discriminant analysis,
+    performs within-dataset validation, and reports dataset-specific
+    feasibility warnings.
+License: MIT + file LICENSE
+Encoding: UTF-8
