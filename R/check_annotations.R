@@ -147,15 +147,21 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   } else {
     rep(NA_real_, nrow(oof_scores))
   }
+  correct_identity <- predicted_id == y
+  # Samples whose label disagrees with the top prediction may be genuine
+  # misannotations; using them as the "correct" reference set would drag the
+  # threshold down and mask the very errors being detected.
+  reference <- if (sum(correct_identity) >= 2L) correct_identity else
+    rep(TRUE, length(y))
   support_threshold <- .select_lower_threshold(
-    observed_support, target_specificity
+    observed_support[reference], target_specificity
   )
   flagged <- observed_support < support_threshold
 
-  correct_identity <- predicted_id == y
   known_max_probability <- apply(class_probabilities, 1L, max)
+  known_max_score <- apply(oof_scores, 1L, max)
   unknown_threshold <- .select_lower_threshold(
-    known_max_probability, target_specificity
+    known_max_score[reference], target_specificity
   )
   wrong_indices <- lapply(seq_along(y), function(i) {
     setdiff(seq_along(class_counts), class_index[i])
@@ -167,10 +173,11 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   false_support <- class_probabilities[
     cbind(false_sample_index, match(false_labels, colnames(oof_scores)))
   ]
-  misannotation_positive <- c(rep(FALSE, length(y)),
+  misannotation_positive <- c(rep(FALSE, sum(reference)),
                               rep(TRUE, length(false_support)))
-  misannotation_flagged <- c(flagged, false_support < support_threshold)
-  misannotation_score <- c(-observed_support, -false_support)
+  misannotation_flagged <- c(flagged[reference],
+                             false_support < support_threshold)
+  misannotation_score <- c(-observed_support[reference], -false_support)
   misannotation_metrics <- .binary_metrics(
     misannotation_positive, misannotation_flagged, misannotation_score
   )
@@ -200,9 +207,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     cbind(swap_samples, match(swap_labels, colnames(oof_scores)))
   ]
   pairwise_swap_metrics <- .binary_metrics(
-    c(rep(FALSE, length(y)), rep(TRUE, length(swap_support))),
-    c(flagged, swap_support < support_threshold),
-    c(-observed_support, -swap_support)
+    c(rep(FALSE, sum(reference)), rep(TRUE, length(swap_support))),
+    c(flagged[reference], swap_support < support_threshold),
+    c(-observed_support[reference], -swap_support)
   )
   top_three <- vapply(seq_along(y), function(i) {
     ranked <- names(sort(oof_scores[i, ], decreasing = TRUE))
@@ -210,7 +217,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }, logical(1))
 
   unknown <- .unknown_validation(
-    x, y, temperature, unknown_threshold, shrinkage, known_max_probability,
+    x, y, unknown_threshold, shrinkage, known_max_score[reference],
     progress = progress
   )
   calibration <- list(
@@ -239,9 +246,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     top_score_margin = top_margin,
     annotation_correctness_probability = NA_real_,
     suspicious = flagged,
-    potential_unknown_individual = known_max_probability < unknown_threshold,
+    potential_unknown_individual = known_max_score < unknown_threshold,
     most_likely_alternative = ifelse(
-      flagged & known_max_probability >= unknown_threshold & predicted_id != y,
+      flagged & known_max_score >= unknown_threshold & predicted_id != y,
       predicted_id, NA_character_
     ),
     candidate_correction = NA_character_,
@@ -292,7 +299,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       unknown_individual_detection = unknown_status,
       warning = paste(
         "Internal estimates are exploratory: threshold selection and",
-        "performance use the same out-of-fold predictions."
+        "performance use the same out-of-fold predictions. Thresholds and",
+        "specificity use only samples whose label matches the top prediction."
       )
     )
     reliable_correction <- detection_status == "appears_feasible" &&
@@ -332,7 +340,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     feasibility = feasibility,
     thresholds = list(
       observed_id_probability = support_threshold,
-      unknown_max_probability = unknown_threshold,
+      unknown_max_score = unknown_threshold,
       target_specificity = target_specificity
     )
   )

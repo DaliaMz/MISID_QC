@@ -55,7 +55,7 @@
                          na.rm = TRUE))
 }
 
-.unknown_validation <- function(x, y, temperature, known_threshold, shrinkage,
+.unknown_validation <- function(x, y, known_threshold, shrinkage,
                                 known_confidence, progress = FALSE) {
   classes <- sort(unique(y))
   if (length(classes) < 3L) {
@@ -82,7 +82,7 @@
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                                shrinkage = shrinkage)
     scores <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
-    confidence <- apply(.softmax_scores(scores, temperature), 1L, max)
+    confidence <- apply(scores, 1L, max)
     unknown_confidence <- c(unknown_confidence, confidence)
     if (isTRUE(progress) &&
         (i %% individual_progress_interval == 0L || i == length(classes))) {
