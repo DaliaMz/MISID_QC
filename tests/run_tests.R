@@ -52,7 +52,17 @@ stopifnot(all(c("misannotation_detection", "identity_recovery",
                 "unknown_individual_detection") %in%
               names(result$feasibility)))
 stopifnot("pairwise_swap_detection" %in% names(result$performance))
-stopifnot(length(result$calibration$temperature) == 1L)
+stopifnot(length(result$calibration$margin_threshold) == 1L)
+stopifnot(!any(result$predictions$suspicious &
+                 !result$predictions$confident_prediction))
+stopifnot(all(is.na(result$predictions$predicted_id[
+  !result$predictions$confident_prediction])))
+stopifnot(length(result$calibration$abstain_reason_counts) == 3L)
+stopifnot(all(c("observed", "simulated") %in% result$risk_coverage$source))
+stopifnot(all(is.finite(result$risk_coverage$coverage)))
+pdf(NULL)
+stopifnot(is.data.frame(plot_risk_coverage(result)))
+invisible(dev.off())
 stopifnot(all(is.na(result$predictions$candidate_correction)))
 
 cv_progress_messages <- character()

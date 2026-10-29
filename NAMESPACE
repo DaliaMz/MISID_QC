@@ -1,3 +1,4 @@
 export(check_annotations)
 export(fit_shrinkage_lda)
+export(plot_risk_coverage)
 export(predict_shrinkage_lda)

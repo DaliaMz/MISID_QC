@@ -6,9 +6,11 @@
 #' from its own fitted reference. This initial implementation uses all supplied
 #' features and does not normalize or select features.
 #'
-#' Class probabilities are temperature-scaled probabilities across enrolled
-#' identities. They are not probabilities that an observed annotation is
-#' correct. The function therefore leaves
+#' Evidence is expressed as margins between raw shrinkage-LDA scores: the
+#' top-versus-second margin and the annotation margin (top versus observed
+#' label). No probabilities are produced. Annotation margins are not
+#' probabilities that an observed annotation is correct. The function therefore
+#' leaves
 #' `annotation_correctness_probability` missing; simulated error prevalence
 #' does not identify a real-data annotation-error prevalence.
 #'
@@ -19,7 +21,7 @@
 #' @param id_col Name of the observed individual identifier column.
 #' @param shrinkage Shrinkage fraction for the diagonal covariance target.
 #' @param target_specificity Target specificity used to select the lower-tail
-#'   thresholds for annotation support and unknown detection.
+#'   margin and unknown-detection thresholds.
 #' @param assess_feasibility Whether to return task-specific feasibility
 #'   assessments based on internal validation.
 #' @param progress Whether to report progress updates. Defaults to `TRUE` in
@@ -35,7 +37,7 @@
 #'   fall at or below the top-versus-second raw score margin threshold. Samples
 #'   predicted incorrectly with an annotation margin (top versus observed
 #'   score) above this threshold are treated as confidently misassigned and
-#'   excluded from temperature fitting.
+#'   excluded from the threshold reference set.
 #' @param refit_clean Whether to refit the out-of-fold models after removing
 #'   confidently misassigned samples from training, and use those second-pass
 #'   scores for calibration and all downstream metrics. Individuals with fewer
@@ -44,9 +46,24 @@
 #'   `calibration$first_pass_agreement` and `calibration$oof_agreement` report
 #'   agreement before and after the refit; the minimum-agreement gate applies
 #'   to the first pass.
+#' @param mismatch_rate Fraction of clean samples whose labels are swapped
+#'   pairwise in a simulation that gives known-truth agreement for the
+#'   risk-coverage curve. `NULL` or 0 disables the simulation.
+#' @param min_accuracy Target agreement among samples that receive a
+#'   prediction. The abstention cutoff is the lowest top-versus-second margin
+#'   at which simulated true-label agreement (observed agreement when the
+#'   simulation is off) among retained samples, pooled with held-out
+#'   individuals counted as errors, reaches this value. Samples with a top
+#'   score below the unknown threshold also abstain. Abstaining samples get `predicted_id = NA`, are never flagged as suspicious and have
+#'   status `"no_confident_prediction"`; if the target is never reached, all
+#'   samples abstain.
+#' @param unknown_rate Assumed fraction of unknown (non-enrolled) samples when
+#'   pooling held-out-individual samples with known samples to choose the
+#'   abstention cutoff. Retained unknown samples count as errors. Ignored when
+#'   fewer than three individuals prevent held-out validation.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
-#'   temperature-scaled `identity_probabilities`, `performance`,
-#'   `calibration`, `held_out` (count, fraction and IDs of samples held out as
+#'   `performance`, `calibration`, `risk_coverage` (see
+#'   [plot_risk_coverage()]), `mismatch_simulation`, `held_out` (count, fraction and IDs of samples held out as
 #'   confidently misassigned, from the first pass), `feasibility`, and
 #'   `thresholds` components.
 #' @export
@@ -55,7 +72,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               assess_feasibility = TRUE,
                               progress = interactive(), cv_folds = NULL,
                               min_agreement = 0.7, margin_coverage = 0.95,
-                              refit_clean = TRUE) {
+                              refit_clean = TRUE, mismatch_rate = 0.1,
+                              min_accuracy = 0.9, unknown_rate = 0.05) {
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -151,8 +169,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
 
   class_index <- match(y, colnames(oof_scores))
-  predicted_id <- colnames(oof_scores)[max.col(oof_scores, ties.method = "first")]
-  correct_identity <- predicted_id == y
+  margins <- .score_margins(oof_scores, y)
+  predicted_id <- margins$predicted
+  correct_identity <- margins$correct
   oof_agreement <- mean(correct_identity)
   if (isTRUE(progress)) {
     message(sprintf(
@@ -168,10 +187,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     ))
   }
 
-  ordered_scores <- t(apply(oof_scores, 1L, sort, decreasing = TRUE))
-  top_margin <- ordered_scores[, 1L] - ordered_scores[, 2L]
-  annotation_margin <- ordered_scores[, 1L] -
-    oof_scores[cbind(seq_along(y), class_index)]
+  top_margin <- margins$top_margin
+  annotation_margin <- margins$annotation_margin
   top_margin_threshold <- unname(stats::quantile(
     top_margin[correct_identity], probs = margin_coverage, type = 1
   ))
@@ -211,63 +228,112 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       shrinkage
     )
     class_index <- match(y, colnames(oof_scores))
-    predicted_id <- colnames(oof_scores)[
-      max.col(oof_scores, ties.method = "first")
-    ]
-    correct_identity <- predicted_id == y
+    margins <- .score_margins(oof_scores, y)
+    predicted_id <- margins$predicted
+    correct_identity <- margins$correct
     oof_agreement <- mean(correct_identity)
-    ordered_scores <- t(apply(oof_scores, 1L, sort, decreasing = TRUE))
-    top_margin <- ordered_scores[, 1L] - ordered_scores[, 2L]
-    annotation_margin <- ordered_scores[, 1L] -
-      oof_scores[cbind(seq_along(y), class_index)]
+    top_margin <- margins$top_margin
+    annotation_margin <- margins$annotation_margin
   }
   if (isTRUE(progress)) {
-    message("Calibrating identity scores and summarizing validation metrics.")
+    message("Setting the annotation margin threshold and summarizing validation metrics.")
   }
-  temperature <- .fit_temperature(
-    oof_scores[!confidently_misassigned, , drop = FALSE],
-    y[!confidently_misassigned]
-  )
-  class_probabilities <- .softmax_scores(oof_scores, temperature)
-  observed_support <- class_probabilities[
-    cbind(seq_along(y), class_index)
-  ]
   # Confidently misassigned samples are probable misannotations; keeping them
-  # in the reference set would drag the thresholds down and mask the errors.
+  # in the reference set would inflate the thresholds and mask the errors.
   reference <- !confidently_misassigned
-  support_threshold <- .select_lower_threshold(
-    observed_support[reference], target_specificity
+  # Every wrong identity as a false label: margin = top score - that score.
+  is_observed <- col(oof_scores) == class_index
+  false_margin <- (margins$top_score - oof_scores)[!is_observed]
+  margin_threshold <- .select_threshold(
+    annotation_margin[reference], false_margin, target_specificity, "upper"
   )
-  flagged <- observed_support < support_threshold
-
-  known_max_probability <- apply(class_probabilities, 1L, max)
-  known_max_score <- apply(oof_scores, 1L, max)
-  unknown_threshold <- .select_lower_threshold(
-    known_max_score[reference], target_specificity
+  known_max_score <- margins$top_score
+  unknown <- .unknown_validation(
+    x, y, NULL, shrinkage, known_max_score[reference],
+    exclude = confidently_misassigned, progress = progress,
+    target_specificity = target_specificity
   )
-  wrong_indices <- lapply(seq_along(y), function(i) {
-    setdiff(seq_along(class_counts), class_index[i])
-  })
-  false_labels <- unlist(lapply(seq_along(y), function(i) {
-    colnames(oof_scores)[wrong_indices[[i]]]
-  }), use.names = FALSE)
-  false_sample_index <- rep(seq_along(y), lengths(wrong_indices))
-  false_support <- class_probabilities[
-    cbind(false_sample_index, match(false_labels, colnames(oof_scores)))
-  ]
-  misannotation_positive <- c(rep(FALSE, sum(reference)),
-                              rep(TRUE, length(false_support)))
-  misannotation_flagged <- c(flagged[reference],
-                             false_support < support_threshold)
-  misannotation_score <- c(-observed_support[reference], -false_support)
-  misannotation_metrics <- .binary_metrics(
-    misannotation_positive, misannotation_flagged, misannotation_score
-  )
-  identity_recovery <- if (length(false_sample_index)) {
-    mean(predicted_id[false_sample_index] == y[false_sample_index])
-  } else {
-    NA_real_
+  unknown_threshold <- unknown$threshold
+  simulation <- NULL
+  clean_counts <- table(y[reference])
+  if (!is.null(mismatch_rate) && mismatch_rate > 0 &&
+      sum(clean_counts >= 2L) >= 2L) {
+    clean <- reference & y %in% names(clean_counts)[clean_counts >= 2L]
+    if (isTRUE(progress)) {
+      message(sprintf(
+        "Simulating label swaps (rate %.0f%%) on %d clean samples.",
+        100 * mismatch_rate, sum(clean)
+      ))
+    }
+    simulation <- .simulate_mismatches(
+      x[clean, , drop = FALSE], y[clean], mismatch_rate,
+      if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
+      refit_clean
+    )
   }
+  risk_coverage <- cbind(
+    source = "observed",
+    .risk_coverage(top_margin, correct_identity),
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(simulation)) {
+    risk_coverage <- rbind(risk_coverage, cbind(
+      source = "simulated",
+      .risk_coverage(simulation$top_margin, simulation$agreement_simulated,
+                     simulation$agreement_real),
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  # Abstention: no prediction when the top margin is below a cutoff (ambiguous
+  # between enrolled individuals) or the top score is below the unknown
+  # threshold (possibly not enrolled). The cutoff is the lowest margin at which
+  # agreement among retained samples reaches min_accuracy, with simulated
+  # true-label agreement preferred because observed labels may be wrong and
+  # held-out-individual samples counted as errors when retained.
+  known <- if (is.null(simulation)) {
+    list(margin = top_margin[reference], score = known_max_score[reference],
+         correct = correct_identity[reference])
+  } else {
+    list(margin = simulation$top_margin, score = simulation$top_score,
+         correct = simulation$agreement_real)
+  }
+  abstention <- .abstention_threshold(
+    known$margin, known$score, known$correct,
+    unknown$top_margin, unknown$top_score, unknown_threshold,
+    min_accuracy, unknown_rate
+  )
+  abstain_threshold <- abstention$threshold
+  low_margin <- top_margin < abstain_threshold
+  low_score <- known_max_score < unknown_threshold
+  confident_prediction <- !low_margin & !low_score
+  abstain_reason_counts <- c(
+    low_margin_only = sum(low_margin & !low_score),
+    low_score_only = sum(!low_margin & low_score),
+    both = sum(low_margin & low_score)
+  )
+  if (isTRUE(progress)) {
+    message(sprintf(
+      "Abstaining on %d of %d samples (margin < %.3g or top score < %.3g) to keep agreement >= %.0f%%%s.",
+      sum(!confident_prediction), length(y), abstain_threshold,
+      unknown_threshold, 100 * min_accuracy,
+      if (unknown$n) " including held-out individuals" else ""
+    ))
+  }
+  # Samples without a confident prediction are never flagged: a small top
+  # margin makes disagreement with the observed label uninformative.
+  flagged <- confident_prediction & annotation_margin > margin_threshold
+
+  misannotation_metrics <- .binary_metrics(
+    c(rep(FALSE, sum(reference)), rep(TRUE, length(false_margin))),
+    c(flagged[reference],
+      confident_prediction[row(oof_scores)[!is_observed]] &
+        false_margin > margin_threshold),
+    c(annotation_margin[reference], false_margin)
+  )
+  # Each sample is scored against every wrong label equally often, so recovery
+  # equals overall agreement.
+  identity_recovery <- mean(correct_identity)
   swap_samples <- integer()
   swap_labels <- character()
   for (i in seq_len(length(class_counts) - 1L)) {
@@ -285,51 +351,52 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       )
     }
   }
-  swap_support <- class_probabilities[
-    cbind(swap_samples, match(swap_labels, colnames(oof_scores)))
-  ]
+  swap_margin <- margins$top_score[swap_samples] -
+    oof_scores[cbind(swap_samples, match(swap_labels, colnames(oof_scores)))]
   pairwise_swap_metrics <- .binary_metrics(
-    c(rep(FALSE, sum(reference)), rep(TRUE, length(swap_support))),
-    c(flagged[reference], swap_support < support_threshold),
-    c(-observed_support[reference], -swap_support)
+    c(rep(FALSE, sum(reference)), rep(TRUE, length(swap_margin))),
+    c(flagged[reference],
+      confident_prediction[swap_samples] & swap_margin > margin_threshold),
+    c(annotation_margin[reference], swap_margin)
   )
-  top_three <- vapply(seq_along(y), function(i) {
-    ranked <- names(sort(oof_scores[i, ], decreasing = TRUE))
-    y[i] %in% ranked[seq_len(min(3L, length(ranked)))]
-  }, logical(1))
+  top_three <- 1L + rowSums(oof_scores > margins$observed_score) <= 3L
 
-  unknown <- .unknown_validation(
-    x, y, unknown_threshold, shrinkage, known_max_score[reference],
-    exclude = confidently_misassigned, progress = progress
-  )
   calibration <- list(
-    method = "temperature_scaling",
-    temperature = temperature,
+    method = "score_margin_threshold",
+    margin_threshold = margin_threshold,
+    exclusion_margin_threshold = top_margin_threshold,
+    abstain_margin_threshold = abstain_threshold,
+    prediction_coverage = mean(confident_prediction),
+    abstain_reason_counts = abstain_reason_counts,
+    abstention_includes_unknowns = unknown$n > 0L,
+    min_accuracy = min_accuracy,
     first_pass_agreement = first_pass_agreement,
     oof_agreement = oof_agreement,
     dropped_individuals = dropped_individuals,
-    top_margin_threshold = top_margin_threshold,
     n_confidently_misassigned = sum(confidently_misassigned),
-    multiclass_brier_score = mean(rowSums((class_probabilities -
-      outer(y, colnames(oof_scores), `==`) * 1)^2)),
-    multiclass_log_loss = -mean(log(pmax(
-      observed_support, .Machine$double.xmin
-    ))),
+    mismatch_simulation = if (is.null(simulation)) NULL else list(
+      rate = mismatch_rate,
+      n_samples = nrow(simulation),
+      n_misannotated = sum(simulation$actually_misannotated),
+      n_confidently_misassigned = sum(simulation$confidently_misassigned),
+      agreement_simulated = mean(simulation$agreement_simulated),
+      agreement_real = mean(simulation$agreement_real)
+    ),
     note = paste(
-      "Calibrates candidate identity probabilities, not annotation correctness;",
-      "no real-world error prevalence is assumed."
+      "Flags samples whose top-versus-observed raw score margin exceeds a",
+      "cutoff that keeps at least the target specificity among reference",
+      "samples while maximizing sensitivity to simulated false labels;",
+      "not an annotation-correctness probability."
     )
   )
   predictions <- data.frame(
     sample_id = rownames(x),
     observed_id = y,
-    predicted_id = predicted_id,
-    observed_id_score = oof_scores[cbind(seq_along(y), class_index)],
-    top_candidate_score = apply(oof_scores, 1L, max),
-    top_vs_observed_score_margin = apply(oof_scores, 1L, max) -
-      oof_scores[cbind(seq_along(y), class_index)],
-    observed_id_probability = observed_support,
-    top_candidate_probability = known_max_probability,
+    predicted_id = ifelse(confident_prediction, predicted_id, NA_character_),
+    confident_prediction = confident_prediction,
+    observed_id_score = margins$observed_score,
+    top_candidate_score = margins$top_score,
+    top_vs_observed_score_margin = annotation_margin,
     top_score_margin = top_margin,
     annotation_score_margin = annotation_margin,
     confidently_misassigned = confidently_misassigned,
@@ -389,7 +456,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       warning = paste(
         "Internal estimates are exploratory: threshold selection and",
         "performance use the same out-of-fold predictions. Thresholds and",
-        "specificity exclude confidently misassigned samples."
+        "specificity exclude confidently misassigned samples. Margin-based",
+        "flagging has no probability interpretation. Margin and unknown",
+        "thresholds are tuned on the same simulated positives used to estimate",
+        "sensitivity, which makes sensitivity optimistic."
       )
     )
     reliable_correction <- detection_status == "appears_feasible" &&
@@ -408,24 +478,26 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   reliable_unknown <- !is.null(feasibility) &&
     feasibility$unknown_individual_detection == "appears_feasible"
   predictions$annotation_status <- ifelse(
-    !reliable_assessment,
+    rep(!reliable_assessment, nrow(predictions)),
     "insufficient_evidence",
     ifelse(predictions$potential_unknown_individual & !reliable_unknown,
            "insufficient_evidence",
            ifelse(predictions$potential_unknown_individual,
                   "potential_unknown_individual",
+           ifelse(!confident_prediction, "no_confident_prediction",
            ifelse(!flagged, "no_evidence_of_incorrect_annotation",
                   ifelse(!is.na(predictions$candidate_correction),
                          "suspicious_with_candidate_correction",
-                         "suspicious_without_reliable_alternative"))))
+                         "suspicious_without_reliable_alternative")))))
   )
 
   list(
     predictions = predictions,
     identity_scores = oof_scores,
-    identity_probabilities = class_probabilities,
     performance = performance,
     calibration = calibration,
+    risk_coverage = risk_coverage,
+    mismatch_simulation = simulation,
     held_out = list(
       n_confidently_misassigned = length(held_out_ids),
       n_samples = n_samples_first_pass,
@@ -434,7 +506,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     ),
     feasibility = feasibility,
     thresholds = list(
-      observed_id_probability = support_threshold,
+      annotation_margin = margin_threshold,
       unknown_max_score = unknown_threshold,
       target_specificity = target_specificity
     )

@@ -8,4 +8,4 @@ Description: Scores repeated-measures RNA-seq samples against candidate
     feasibility warnings.
 License: MIT + file LICENSE
 Encoding: UTF-8
-Imports: stats
+Imports: graphics, stats

@@ -41,9 +41,9 @@ and whole-individual holdout for unknown-individual experiments.
 State the resampling unit, training-only preprocessing, reference exclusions,
 and separation of calibration, threshold selection, and evaluation.
 
-### 2.5 Probability calibration
+### 2.5 Margin thresholds and calibration
 
-Compare candidate-identity calibration methods and separately assess whether
+Compare raw-score margin thresholds and separately assess whether
 annotation-correctness probabilities are identifiable under unknown error
 prevalence.
 
