@@ -56,7 +56,8 @@
 }
 
 .unknown_validation <- function(x, y, known_threshold, shrinkage,
-                                known_confidence, progress = FALSE) {
+                                known_confidence, exclude = rep(FALSE, length(y)),
+                                progress = FALSE) {
   classes <- sort(unique(y))
   if (length(classes) < 3L) {
     if (isTRUE(progress)) {
@@ -77,8 +78,8 @@
   individual_progress_interval <- max(1L, ceiling(length(classes) / 10L))
   for (i in seq_along(classes)) {
     held_out <- classes[i]
-    train <- y != held_out
-    test <- !train
+    test <- y == held_out
+    train <- !test & !exclude
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                                shrinkage = shrinkage)
     scores <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
@@ -100,4 +101,32 @@
     n = length(unknown_confidence),
     status = "estimated"
   )
+}
+
+# Second-pass out-of-fold scores trained only on non-excluded samples. Excluded
+# samples are still scored, but never used for training. `n_folds` NULL means
+# leave-one-sample-out.
+.refit_oof_scores <- function(x, y, exclude, n_folds, shrinkage) {
+  classes <- sort(unique(y))
+  scores <- matrix(NA_real_, nrow(x), length(classes),
+                   dimnames = list(rownames(x), classes))
+  if (is.null(n_folds)) {
+    fold_id <- seq_len(nrow(x))
+  } else {
+    fold_id <- integer(nrow(x))
+    for (individual in classes) {
+      clean <- which(y == individual & !exclude)
+      fold_id[clean] <- sample(rep(seq_len(n_folds), length.out = length(clean)))
+    }
+    fold_id[exclude] <- sample(rep(seq_len(n_folds),
+                                   length.out = sum(exclude)))
+  }
+  for (fold in unique(fold_id)) {
+    test <- fold_id == fold
+    train <- !test & !exclude
+    model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
+                               shrinkage = shrinkage)
+    scores[test, ] <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
+  }
+  scores
 }
