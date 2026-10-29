@@ -57,7 +57,7 @@ stopifnot(!any(result$predictions$suspicious &
                  !result$predictions$confident_prediction))
 stopifnot(all(is.na(result$predictions$predicted_id[
   !result$predictions$confident_prediction])))
-stopifnot(length(result$calibration$abstain_reason_counts) == 3L)
+stopifnot(length(result$calibration$abstain_reason_counts) == 2L)
 stopifnot(all(c("observed", "simulated") %in% result$risk_coverage$source))
 stopifnot(all(is.finite(result$risk_coverage$coverage)))
 pdf(NULL)

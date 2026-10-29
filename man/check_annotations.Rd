@@ -6,7 +6,7 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
   min_agreement = 0.7, margin_coverage = 0.95, refit_clean = TRUE,
-  mismatch_rate = 0.1, min_accuracy = 0.9, unknown_rate = 0.05)
+  mismatch_rate = 0.1, min_accuracy = 0.9, unknown_mad = 3)
 }
 \arguments{
 \item{expr}{Numeric expression matrix, features by samples, with unique
@@ -16,7 +16,7 @@ sample names in \code{colnames(expr)}.}
 \item{id_col}{Name of the observed individual identifier column.}
 \item{shrinkage}{Shrinkage fraction for the diagonal covariance target.}
 \item{target_specificity}{Target specificity used to select the lower-tail
-margin and unknown-detection thresholds.}
+annotation margin threshold.}
 \item{assess_feasibility}{Whether to return task-specific feasibility
 assessments based on internal validation.}
 \item{progress}{Whether to report progress updates. Defaults to \code{TRUE}
@@ -47,16 +47,14 @@ risk-coverage curve. \code{NULL} or 0 disables the simulation.}
 \item{min_accuracy}{Target agreement among samples that receive a prediction.
 The abstention cutoff is the lowest top-versus-second margin at which simulated
 true-label agreement (observed agreement when the simulation is off) among
-retained samples, pooled with held-out individuals counted as errors, reaches
-this value. Samples with a top score below the unknown threshold also abstain.
-Abstaining samples get \code{predicted_id =
+retained samples reaches this value. Abstaining samples get \code{predicted_id =
 NA}, are never flagged as suspicious and have status
 \code{"no_confident_prediction"}; if the target is never reached, all samples
 abstain.}
-\item{unknown_rate}{Assumed fraction of unknown (non-enrolled) samples when
-pooling held-out-individual samples with known samples to choose the abstention
-cutoff. Retained unknown samples count as errors. Ignored when fewer than three
-individuals prevent held-out validation.}
+\item{unknown_mad}{Samples whose top margin is below
+\code{median - unknown_mad * MAD} of the log top margin of enrolled samples
+abstain and are marked as potential unknown
+individuals. No share of samples is forced to be unknown.}
 }
 \value{
 A list with sample-level \code{predictions}, raw \code{identity_scores},

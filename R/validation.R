@@ -187,29 +187,22 @@
   candidates[best][ceiling(length(best) / 2)]
 }
 
-.unknown_validation <- function(x, y, known_threshold, shrinkage,
-                                known_confidence, exclude = rep(FALSE, length(y)),
-                                progress = FALSE, target_specificity = 0.95) {
+# Top margins of held-out individuals, each scored by a model trained without
+# that individual (and without excluded samples). They act as known-unknown
+# positives for the margin-based unknown rule.
+.unknown_validation <- function(x, y, shrinkage, exclude = rep(FALSE, length(y)),
+                                progress = FALSE) {
   classes <- sort(unique(y))
   if (length(classes) < 3L) {
     if (isTRUE(progress)) {
       message("Skipping held-out-individual validation: at least three individuals are needed.")
     }
-    return(list(
-      metrics = NULL,
-      threshold = .select_lower_threshold(known_confidence,
-                                          target_specificity),
-      n = 0L,
-      top_score = numeric(),
-      top_margin = numeric(),
-      status = "insufficient_evidence"
-    ))
+    return(list(n = 0L, top_margin = numeric(), status = "insufficient_evidence"))
   }
   if (isTRUE(progress)) {
     message(sprintf("Validating held-out individuals across %d individuals.",
                     length(classes)))
   }
-  unknown_confidence <- numeric()
   unknown_margin <- numeric()
   individual_progress_interval <- max(1L, ceiling(length(classes) / 10L))
   for (i in seq_along(classes)) {
@@ -219,8 +212,6 @@
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                                shrinkage = shrinkage)
     scores <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
-    confidence <- apply(scores, 1L, max)
-    unknown_confidence <- c(unknown_confidence, confidence)
     unknown_margin <- c(
       unknown_margin,
       .score_margins(scores, rep(held_out, nrow(scores)))$top_margin
@@ -231,21 +222,16 @@
                       i, length(classes)))
     }
   }
-  confidence <- c(known_confidence, unknown_confidence)
-  positive <- c(rep(FALSE, length(known_confidence)),
-                rep(TRUE, length(unknown_confidence)))
-  known_threshold <- .select_threshold(
-    known_confidence, unknown_confidence, target_specificity, "lower"
-  )
-  flags <- confidence < known_threshold
-  list(
-    metrics = .binary_metrics(positive, flags, score = -confidence),
-    threshold = known_threshold,
-    n = length(unknown_confidence),
-    top_score = unknown_confidence,
-    top_margin = unknown_margin,
-    status = "estimated"
-  )
+  list(n = length(unknown_margin), top_margin = unknown_margin,
+       status = "estimated")
+}
+
+# Robust lower cutoff on the log top margin of enrolled samples. It uses no
+# unknown samples and no single extreme sample, and a clean cohort flags
+# almost nothing.
+.unknown_margin_threshold <- function(known_margin, mad_multiplier) {
+  log_margin <- log(pmax(known_margin, .Machine$double.eps))
+  exp(stats::median(log_margin) - mad_multiplier * stats::mad(log_margin))
 }
 
 # Second-pass out-of-fold scores trained only on non-excluded samples. Excluded
@@ -276,36 +262,19 @@
   scores
 }
 
-# Lowest top-margin cutoff at which weighted agreement among retained samples
-# reaches `min_accuracy`. A sample is retained when its top margin is at or
-# above the cutoff and its top score is at or above `score_threshold`.
-# Held-out-individual samples (no enrolled identity) count as errors when
-# retained and are weighted to make up `unknown_rate` of the pool.
-.abstention_threshold <- function(known_margin, known_score, known_correct,
-                                  unknown_margin, unknown_score,
-                                  score_threshold, min_accuracy,
-                                  unknown_rate, n_candidates = 200L) {
-  n_known <- length(known_margin)
-  n_unknown <- length(unknown_margin)
-  unknown_weight <- if (n_unknown && unknown_rate > 0) {
-    unknown_rate / (1 - unknown_rate) * n_known / n_unknown
-  } else {
-    0
-  }
+# Lowest top-margin cutoff at which agreement among retained samples
+# (margin at or above the cutoff) reaches `min_accuracy`.
+.abstention_threshold <- function(known_margin, known_correct, min_accuracy,
+                                  n_candidates = 200L) {
   candidates <- sort(unique(known_margin))
   if (length(candidates) > n_candidates) {
     candidates <- candidates[unique(round(seq(1, length(candidates),
                                               length.out = n_candidates)))]
   }
   accuracy <- vapply(candidates, function(cutoff) {
-    keep_known <- known_margin >= cutoff & known_score >= score_threshold
-    keep_unknown <- unknown_margin >= cutoff & unknown_score >= score_threshold
-    retained <- sum(keep_known) + unknown_weight * sum(keep_unknown)
-    if (retained == 0) NA_real_ else sum(known_correct[keep_known]) / retained
+    keep <- known_margin >= cutoff
+    if (!any(keep)) NA_real_ else mean(known_correct[keep])
   }, numeric(1))
   ok <- !is.na(accuracy) & accuracy >= min_accuracy
-  list(
-    threshold = if (any(ok)) min(candidates[ok]) else Inf,
-    unknown_weight = unknown_weight
-  )
+  list(threshold = if (any(ok)) min(candidates[ok]) else Inf)
 }

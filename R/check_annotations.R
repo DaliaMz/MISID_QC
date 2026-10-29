@@ -21,7 +21,7 @@
 #' @param id_col Name of the observed individual identifier column.
 #' @param shrinkage Shrinkage fraction for the diagonal covariance target.
 #' @param target_specificity Target specificity used to select the lower-tail
-#'   margin and unknown-detection thresholds.
+#'   annotation margin threshold.
 #' @param assess_feasibility Whether to return task-specific feasibility
 #'   assessments based on internal validation.
 #' @param progress Whether to report progress updates. Defaults to `TRUE` in
@@ -52,15 +52,13 @@
 #' @param min_accuracy Target agreement among samples that receive a
 #'   prediction. The abstention cutoff is the lowest top-versus-second margin
 #'   at which simulated true-label agreement (observed agreement when the
-#'   simulation is off) among retained samples, pooled with held-out
-#'   individuals counted as errors, reaches this value. Samples with a top
-#'   score below the unknown threshold also abstain. Abstaining samples get `predicted_id = NA`, are never flagged as suspicious and have
+#'   simulation is off) among retained samples reaches this value. Abstaining
+#'   samples get `predicted_id = NA`, are never flagged as suspicious and have
 #'   status `"no_confident_prediction"`; if the target is never reached, all
 #'   samples abstain.
-#' @param unknown_rate Assumed fraction of unknown (non-enrolled) samples when
-#'   pooling held-out-individual samples with known samples to choose the
-#'   abstention cutoff. Retained unknown samples count as errors. Ignored when
-#'   fewer than three individuals prevent held-out validation.
+#' @param unknown_mad Samples whose top margin is below
+#'   `median - unknown_mad * MAD` of the log top margin of enrolled samples
+#'   abstain and are marked as potential unknown individuals. No share of samples is forced to be unknown.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
 #'   `performance`, `calibration`, `risk_coverage` (see
 #'   [plot_risk_coverage()]), `mismatch_simulation`, `held_out` (count, fraction and IDs of samples held out as
@@ -73,7 +71,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               progress = interactive(), cv_folds = NULL,
                               min_agreement = 0.7, margin_coverage = 0.95,
                               refit_clean = TRUE, mismatch_rate = 0.1,
-                              min_accuracy = 0.9, unknown_rate = 0.05) {
+                              min_accuracy = 0.9, unknown_mad = 3) {
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -247,13 +245,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   margin_threshold <- .select_threshold(
     annotation_margin[reference], false_margin, target_specificity, "upper"
   )
-  known_max_score <- margins$top_score
   unknown <- .unknown_validation(
-    x, y, NULL, shrinkage, known_max_score[reference],
-    exclude = confidently_misassigned, progress = progress,
-    target_specificity = target_specificity
+    x, y, shrinkage, exclude = confidently_misassigned, progress = progress
   )
-  unknown_threshold <- unknown$threshold
   simulation <- NULL
   clean_counts <- table(y[reference])
   if (!is.null(mismatch_rate) && mismatch_rate > 0 &&
@@ -286,38 +280,40 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
 
   # Abstention: no prediction when the top margin is below a cutoff (ambiguous
-  # between enrolled individuals) or the top score is below the unknown
-  # threshold (possibly not enrolled). The cutoff is the lowest margin at which
+  # between enrolled individuals). The cutoff is the lowest margin at which
   # agreement among retained samples reaches min_accuracy, with simulated
-  # true-label agreement preferred because observed labels may be wrong and
-  # held-out-individual samples counted as errors when retained.
+  # true-label agreement preferred because observed labels may be wrong. The
+  # unknown cutoff is a robust lower bound on enrolled top margins; unknowns
+  # always abstain too.
   known <- if (is.null(simulation)) {
-    list(margin = top_margin[reference], score = known_max_score[reference],
-         correct = correct_identity[reference])
+    list(margin = top_margin[reference], correct = correct_identity[reference])
   } else {
-    list(margin = simulation$top_margin, score = simulation$top_score,
-         correct = simulation$agreement_real)
+    list(margin = simulation$top_margin, correct = simulation$agreement_real)
   }
-  abstention <- .abstention_threshold(
-    known$margin, known$score, known$correct,
-    unknown$top_margin, unknown$top_score, unknown_threshold,
-    min_accuracy, unknown_rate
-  )
-  abstain_threshold <- abstention$threshold
-  low_margin <- top_margin < abstain_threshold
-  low_score <- known_max_score < unknown_threshold
-  confident_prediction <- !low_margin & !low_score
+  abstain_threshold <- .abstention_threshold(
+    known$margin, known$correct, min_accuracy
+  )$threshold
+  unknown_threshold <- .unknown_margin_threshold(top_margin[reference],
+                                                 unknown_mad)
+  low_margin <- top_margin < max(abstain_threshold, unknown_threshold)
+  unknown_flag <- top_margin < unknown_threshold
+  confident_prediction <- !low_margin
   abstain_reason_counts <- c(
-    low_margin_only = sum(low_margin & !low_score),
-    low_score_only = sum(!low_margin & low_score),
-    both = sum(low_margin & low_score)
+    ambiguous_margin = sum(low_margin & !unknown_flag),
+    potential_unknown_individual = sum(unknown_flag)
   )
+  unknown_metrics <- if (unknown$n) {
+    .binary_metrics(
+      c(rep(FALSE, sum(reference)), rep(TRUE, unknown$n)),
+      c(unknown_flag[reference], unknown$top_margin < unknown_threshold),
+      -c(top_margin[reference], unknown$top_margin)
+    )
+  }
   if (isTRUE(progress)) {
     message(sprintf(
-      "Abstaining on %d of %d samples (margin < %.3g or top score < %.3g) to keep agreement >= %.0f%%%s.",
+      "Abstaining on %d of %d samples (margin < %.3g; %d potential unknown, margin < %.3g) to keep agreement >= %.0f%%.",
       sum(!confident_prediction), length(y), abstain_threshold,
-      unknown_threshold, 100 * min_accuracy,
-      if (unknown$n) " including held-out individuals" else ""
+      sum(unknown_flag), unknown_threshold, 100 * min_accuracy
     ))
   }
   # Samples without a confident prediction are never flagged: a small top
@@ -368,7 +364,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     abstain_margin_threshold = abstain_threshold,
     prediction_coverage = mean(confident_prediction),
     abstain_reason_counts = abstain_reason_counts,
-    abstention_includes_unknowns = unknown$n > 0L,
     min_accuracy = min_accuracy,
     first_pass_agreement = first_pass_agreement,
     oof_agreement = oof_agreement,
@@ -402,9 +397,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     confidently_misassigned = confidently_misassigned,
     annotation_correctness_probability = NA_real_,
     suspicious = flagged,
-    potential_unknown_individual = known_max_score < unknown_threshold,
+    potential_unknown_individual = unknown_flag,
     most_likely_alternative = ifelse(
-      flagged & known_max_score >= unknown_threshold & predicted_id != y,
+      flagged & predicted_id != y,
       predicted_id, NA_character_
     ),
     candidate_correction = NA_character_,
@@ -419,7 +414,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     pairwise_swap_identity_recovery_accuracy = mean(
       predicted_id[swap_samples] == y[swap_samples]
     ),
-    unknown_individual_detection = unknown$metrics,
+    unknown_individual_detection = unknown_metrics,
     unknown_simulation_n = unknown$n
   )
   feasibility <- NULL
@@ -443,8 +438,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     }
     unknown_status <- if (unknown$n < 10L) {
       "insufficient_evidence"
-    } else if (is.finite(unknown$metrics$sensitivity) &&
-               unknown$metrics$sensitivity >= 0.8) {
+    } else if (is.finite(unknown_metrics$sensitivity) &&
+               unknown_metrics$sensitivity >= 0.8) {
       "appears_feasible"
     } else {
       "unreliable"
@@ -507,7 +502,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     feasibility = feasibility,
     thresholds = list(
       annotation_margin = margin_threshold,
-      unknown_max_score = unknown_threshold,
+      unknown_margin = unknown_threshold,
+      abstain_margin = abstain_threshold,
       target_specificity = target_specificity
     )
   )
