@@ -47,9 +47,10 @@ risk-coverage curve. \code{NULL} or 0 disables the simulation.}
 \item{min_accuracy}{Target agreement among samples that receive a prediction.
 The abstention cutoff is the lowest top-versus-second margin at which simulated
 true-label agreement (observed agreement when the simulation is off) among
-retained samples reaches this value. Abstaining samples get \code{predicted_id =
-NA}, are never flagged as suspicious and have status
-\code{"no_confident_prediction"}; if the target is never reached, all samples
+retained samples reaches this value. Abstaining samples get \code{predicted_id_clean = NA}
+(\code{predicted_id} keeps the raw top candidate). They can still be flagged as
+suspicious when the annotation margin is large, but never receive a candidate
+correction; if the target is never reached, all samples
 abstain.}
 \item{unknown_mad}{Samples whose top margin is below
 \code{median - unknown_mad * MAD} of the log top margin of enrolled samples

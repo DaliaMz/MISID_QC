@@ -53,8 +53,9 @@
 #'   prediction. The abstention cutoff is the lowest top-versus-second margin
 #'   at which simulated true-label agreement (observed agreement when the
 #'   simulation is off) among retained samples reaches this value. Abstaining
-#'   samples get `predicted_id = NA`, are never flagged as suspicious and have
-#'   status `"no_confident_prediction"`; if the target is never reached, all
+#'   samples get `predicted_id_clean = NA` (`predicted_id` keeps the raw top
+#'   candidate). They can still be flagged as suspicious when the annotation
+#'   margin is large, but never receive a candidate correction; if the target is never reached, all
 #'   samples abstain.
 #' @param unknown_mad Samples whose top margin is below
 #'   `median - unknown_mad * MAD` of the log top margin of enrolled samples
@@ -316,15 +317,14 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       sum(unknown_flag), unknown_threshold, 100 * min_accuracy
     ))
   }
-  # Samples without a confident prediction are never flagged: a small top
-  # margin makes disagreement with the observed label uninformative.
-  flagged <- confident_prediction & annotation_margin > margin_threshold
+  # Flagging depends on the annotation margin alone: a clearly beaten observed
+  # label is suspicious even when the top margin is too small to name the
+  # replacement, which needs a confident prediction.
+  flagged <- annotation_margin > margin_threshold
 
   misannotation_metrics <- .binary_metrics(
     c(rep(FALSE, sum(reference)), rep(TRUE, length(false_margin))),
-    c(flagged[reference],
-      confident_prediction[row(oof_scores)[!is_observed]] &
-        false_margin > margin_threshold),
+    c(flagged[reference], false_margin > margin_threshold),
     c(annotation_margin[reference], false_margin)
   )
   # Each sample is scored against every wrong label equally often, so recovery
@@ -351,8 +351,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     oof_scores[cbind(swap_samples, match(swap_labels, colnames(oof_scores)))]
   pairwise_swap_metrics <- .binary_metrics(
     c(rep(FALSE, sum(reference)), rep(TRUE, length(swap_margin))),
-    c(flagged[reference],
-      confident_prediction[swap_samples] & swap_margin > margin_threshold),
+    c(flagged[reference], swap_margin > margin_threshold),
     c(annotation_margin[reference], swap_margin)
   )
   top_three <- 1L + rowSums(oof_scores > margins$observed_score) <= 3L
@@ -387,7 +386,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   predictions <- data.frame(
     sample_id = rownames(x),
     observed_id = y,
-    predicted_id = ifelse(confident_prediction, predicted_id, NA_character_),
+    predicted_id = predicted_id,
+    predicted_id_clean = ifelse(confident_prediction, predicted_id,
+                                NA_character_),
     confident_prediction = confident_prediction,
     observed_id_score = margins$observed_score,
     top_candidate_score = margins$top_score,
@@ -464,7 +465,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   predictions$candidate_correction <- ifelse(
       flagged & reliable_correction &
-        !predictions$potential_unknown_individual & predicted_id != y,
+        confident_prediction & predicted_id != y,
       predicted_id,
       NA_character_
   )
@@ -473,17 +474,17 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   reliable_unknown <- !is.null(feasibility) &&
     feasibility$unknown_individual_detection == "appears_feasible"
   predictions$annotation_status <- ifelse(
-    rep(!reliable_assessment, nrow(predictions)),
+    !flagged & (!reliable_assessment |
+                  (predictions$potential_unknown_individual & !reliable_unknown)),
     "insufficient_evidence",
-    ifelse(predictions$potential_unknown_individual & !reliable_unknown,
-           "insufficient_evidence",
-           ifelse(predictions$potential_unknown_individual,
-                  "potential_unknown_individual",
-           ifelse(!confident_prediction, "no_confident_prediction",
-           ifelse(!flagged, "no_evidence_of_incorrect_annotation",
-                  ifelse(!is.na(predictions$candidate_correction),
-                         "suspicious_with_candidate_correction",
-                         "suspicious_without_reliable_alternative")))))
+    ifelse(predictions$potential_unknown_individual & reliable_unknown &
+             !flagged, "potential_unknown_individual",
+    ifelse(!is.na(predictions$candidate_correction),
+           "suspicious_with_candidate_correction",
+    ifelse(flagged, "suspicious_without_reliable_alternative",
+    ifelse(!confident_prediction & predicted_id != y,
+           "no_confident_prediction",
+           "no_evidence_of_incorrect_annotation"))))
   )
 
   list(
