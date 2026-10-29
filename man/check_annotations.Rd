@@ -6,7 +6,9 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
   min_agreement = 0.7, margin_coverage = 0.95, refit_clean = TRUE,
-  mismatch_rate = 0.1, min_accuracy = 0.9, unknown_mad = 3)
+  mismatch_rate = 0.1, min_accuracy = 0.9, unknown_mad = 3,
+  grouped_unknown_validation = FALSE,
+  unknown_stray_samples = 2L)
 }
 \arguments{
 \item{expr}{Numeric expression matrix, features by samples, with unique
@@ -56,6 +58,16 @@ abstain.}
 \code{median - unknown_mad * MAD} of the log top margin of enrolled samples
 abstain and are marked as potential unknown
 individuals. No share of samples is forced to be unknown.}
+\item{unknown_stray_samples}{Unknown-individual validation pretends each enrolled
+individual is a stranger. Up to this many of their samples (never all of them)
+are kept in the data relabelled as random other individuals, as a stranger's
+samples would be in a real cohort, and the rest are dropped. Each kept sample
+is scored by a model that never saw it, giving a margin for an unknown person.}
+\item{grouped_unknown_validation}{By default the stranger simulation is repeated
+for each individual separately. If \code{TRUE} and \code{cv_folds} is set, individuals are
+processed in \code{cv_folds} groups instead, so far fewer models are fit, at the cost
+of slightly optimistic (too large) unknown margins. It only affects the
+reported unknown sensitivity and feasibility, not the unknown cutoff.}
 }
 \value{
 A list with sample-level \code{predictions}, raw \code{identity_scores},

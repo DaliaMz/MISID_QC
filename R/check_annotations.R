@@ -60,6 +60,18 @@
 #' @param unknown_mad Samples whose top margin is below
 #'   `median - unknown_mad * MAD` of the log top margin of enrolled samples
 #'   abstain and are marked as potential unknown individuals. No share of samples is forced to be unknown.
+#' @param unknown_stray_samples Unknown-individual validation pretends each
+#'   enrolled individual is a stranger. Up to this many of their samples (never
+#'   all of them) are kept in the data relabelled as random other individuals,
+#'   as a stranger's samples would be in a real cohort, and the rest are
+#'   dropped. Each kept sample is scored by a model that never saw it, giving a
+#'   margin for an unknown person.
+#' @param grouped_unknown_validation By default the stranger simulation is
+#'   repeated for each individual separately. If `TRUE`
+#'   and `cv_folds` is set, individuals are removed in `cv_folds` groups
+#'   instead, so far fewer models are fit, at the cost of slightly optimistic
+#'   (too large) unknown margins. It only affects the reported unknown
+#'   sensitivity and feasibility, not the unknown cutoff.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
 #'   `performance`, `calibration`, `risk_coverage` (see
 #'   [plot_risk_coverage()]), `mismatch_simulation`, `held_out` (count, fraction and IDs of samples held out as
@@ -72,7 +84,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               progress = interactive(), cv_folds = NULL,
                               min_agreement = 0.7, margin_coverage = 0.95,
                               refit_clean = TRUE, mismatch_rate = 0.1,
-                              min_accuracy = 0.9, unknown_mad = 3) {
+                              min_accuracy = 0.9, unknown_mad = 3,
+                              grouped_unknown_validation = FALSE,
+                              unknown_stray_samples = 2L) {
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -224,7 +238,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     class_counts <- table(y)
     oof_scores <- .refit_oof_scores(
       x, y, confidently_misassigned, if (is.null(cv_folds)) NULL else n_folds,
-      shrinkage
+      shrinkage, progress = progress
     )
     class_index <- match(y, colnames(oof_scores))
     margins <- .score_margins(oof_scores, y)
@@ -243,11 +257,14 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # Every wrong identity as a false label: margin = top score - that score.
   is_observed <- col(oof_scores) == class_index
   false_margin <- (margins$top_score - oof_scores)[!is_observed]
-  margin_threshold <- .select_threshold(
-    annotation_margin[reference], false_margin, target_specificity, "upper"
-  )
   unknown <- .unknown_validation(
-    x, y, shrinkage, exclude = confidently_misassigned, progress = progress
+    x, y, shrinkage, exclude = confidently_misassigned, progress = progress,
+    n_strays = as.integer(unknown_stray_samples),
+    n_folds = if (is.null(cv_folds) || !isTRUE(grouped_unknown_validation)) {
+      NULL
+    } else {
+      n_folds
+    }
   )
   simulation <- NULL
   clean_counts <- table(y[reference])
@@ -266,6 +283,19 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       refit_clean
     )
   }
+  # Real mislabels resemble the simulated swaps, not every possible wrong
+  # label (many of which are easily confused identities with tiny margins), so
+  # the cutoff is tuned against the swaps when they are available.
+  swap_margin_positives <- if (!is.null(simulation)) {
+    simulation$annotation_margin[simulation$actually_misannotated]
+  } else {
+    numeric()
+  }
+  margin_threshold <- .select_threshold(
+    annotation_margin[reference],
+    if (length(swap_margin_positives)) swap_margin_positives else false_margin,
+    target_specificity, "upper"
+  )
   risk_coverage <- cbind(
     source = "observed",
     .risk_coverage(top_margin, correct_identity),
