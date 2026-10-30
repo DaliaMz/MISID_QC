@@ -565,7 +565,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     ifelse(flagged, "suspicious_without_reliable_alternative",
     ifelse(!confident_prediction & predicted_id != y,
            "no_confident_prediction",
-           "no_evidence_of_incorrect_annotation"))))
+    ifelse(confident_prediction & predicted_id != y,
+           "weak_disagreement",
+           "no_evidence_of_incorrect_annotation")))))
   )
   if (low_agreement) {
     # Thresholds were tuned on predictions that mostly disagree with the
