@@ -1,3 +1,6 @@
+custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
+.libPaths(c(custom_lib, .libPaths()))
+
 # Combine the per-scenario rows written by Run_across_GTEX_simulations.R.
 #   Rscript simulations/Aggregate_gtex_results.R [out=simulations/results]
 suppressMessages(library(data.table))

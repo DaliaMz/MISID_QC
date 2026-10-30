@@ -1,3 +1,6 @@
+custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
+.libPaths(c(custom_lib, .libPaths()))
+
 # Run check_annotations() on every scenario in results/simulated_datasets_v2.rds
 # (made by Simulate_full_dataset.R) and score it against the known truth.
 #

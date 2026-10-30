@@ -1,3 +1,6 @@
+custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
+.libPaths(c(custom_lib, .libPaths()))
+
 # Subsampled GTEx datasets across a grid of scenarios, for running
 # check_annotations() against known mis-identifications.
 #

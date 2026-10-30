@@ -1,3 +1,6 @@
+custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
+.libPaths(c(custom_lib, .libPaths()))
+
 # Run check_annotations() on every scenario in results/gtex_scenarios.rds
 # (made by Simulate_from_GTEX_grid.R) and score it against the known truth.
 # Same outputs as Run_across_simulated_data.R, for the GTEx scenarios.
