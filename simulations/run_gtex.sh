@@ -18,7 +18,7 @@
 set -euo pipefail
 module load r/4.5.1
 
-cd /path/to/MISID_QC   # repo root on the cluster; the scripts use paths relative to it
+cd /scratch/project_mnt/S0138/DMizikovsky/misid/MISID_QC   # repo root on the cluster; the scripts use paths relative to it
 export N_TASKS=20
 # One thread per task: the parallelism is the array.
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
