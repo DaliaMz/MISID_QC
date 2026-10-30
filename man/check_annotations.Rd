@@ -6,9 +6,10 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
   min_agreement = 0.7, margin_coverage = 0.95, refit_clean = TRUE,
-  mismatch_rate = 0.1, min_accuracy = 0.9, unknown_mad = 3,
+  mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
+  unknown_mad = 3,
   grouped_unknown_validation = FALSE,
-  unknown_stray_samples = 2L)
+  unknown_stray_samples = 2L, mismatch_repeats = 3L)
 }
 \arguments{
 \item{expr}{Numeric expression matrix, features by samples, with unique
@@ -29,7 +30,9 @@ the number of stratified cross-validation folds. Fold assignment is
 randomized; call \code{set.seed()} beforehand for reproducible results.}
 \item{min_agreement}{Minimum fraction of samples whose out-of-fold top
 predicted identity equals the observed identity. Below this, the function
-stops before calibration.}
+warns, skips the clean refit and returns every sample as
+\code{"insufficient_evidence"} (no clean predictions, flags or corrections),
+keeping raw scores, margins and the remaining outputs.}
 \item{margin_coverage}{Fraction of correctly predicted samples that must fall
 at or below the top-versus-second raw score margin threshold. Samples
 predicted incorrectly with an annotation margin (top versus observed score)
@@ -46,6 +49,10 @@ applies to the first pass.}
 \item{mismatch_rate}{Fraction of clean samples whose labels are swapped
 pairwise in a simulation that gives known-truth agreement for the
 risk-coverage curve. \code{NULL} or 0 disables the simulation.}
+\item{mismatch_repeats}{Number of independent label-swap simulations whose results
+are pooled to tune the cutoffs and estimate sensitivity. More repeats give a less
+extreme annotation cutoff and better sensitivity at the cost of roughly
+proportional simulation time. Use 1 for a single draw.}
 \item{min_accuracy}{Target agreement among samples that receive a prediction.
 The abstention cutoff is the lowest top-versus-second margin at which simulated
 true-label agreement (observed agreement when the simulation is off) among
@@ -54,6 +61,11 @@ retained samples reaches this value. Abstaining samples get \code{predicted_id_c
 suspicious when the annotation margin is large, but never receive a candidate
 correction; if the target is never reached, all samples
 abstain.}
+\item{detect_unknown}{If \code{FALSE}, unknown-individual detection is switched
+off: no stranger validation is run, no sample is marked as a potential
+unknown individual, and abstention uses only the abstention cutoff.
+\code{feasibility$unknown_individual_detection} is \code{"not_assessed"}.}
+
 \item{unknown_mad}{Samples whose top margin is below
 \code{median - unknown_mad * MAD} of the log top margin of enrolled samples
 abstain and are marked as potential unknown

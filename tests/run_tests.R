@@ -93,3 +93,27 @@ stopifnot(inherits(
        silent = TRUE),
   "try-error"
 ))
+
+stopifnot(result$calibration$mismatch_simulation$repeats == 3L)
+single <- check_annotations(expression, metadata, "sample", "individual",
+                            progress = FALSE, mismatch_repeats = 1L)
+stopifnot(single$calibration$mismatch_simulation$repeats == 1L)
+stopifnot(inherits(
+  try(check_annotations(expression, metadata, "sample", "individual",
+                        progress = FALSE, mismatch_repeats = 0),
+      silent = TRUE),
+  "try-error"
+))
+
+low <- suppressWarnings(check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  min_agreement = 1.01
+))
+stopifnot(low$calibration$low_agreement)
+stopifnot(all(low$predictions$annotation_status == "insufficient_evidence"))
+stopifnot(all(is.na(low$predictions$predicted_id_clean)))
+stopifnot(!anyNA(low$predictions$predicted_id))
+stopifnot(inherits(tryCatch(
+  check_annotations(expression, metadata, "sample", "individual",
+                    progress = FALSE, min_agreement = 1.01),
+  warning = function(w) w), "warning"))

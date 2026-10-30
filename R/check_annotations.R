@@ -32,7 +32,9 @@
 #'   is randomized; call `set.seed()` beforehand for reproducible results.
 #' @param min_agreement Minimum fraction of samples whose out-of-fold top
 #'   predicted identity equals the observed identity. Below this, the function
-#'   stops before calibration.
+#'   warns, skips the clean refit and returns every sample as
+#'   `"insufficient_evidence"` (no clean predictions, flags or corrections),
+#'   keeping raw scores, margins and the remaining outputs.
 #' @param margin_coverage Fraction of correctly predicted samples that must
 #'   fall at or below the top-versus-second raw score margin threshold. Samples
 #'   predicted incorrectly with an annotation margin (top versus observed
@@ -49,6 +51,11 @@
 #' @param mismatch_rate Fraction of clean samples whose labels are swapped
 #'   pairwise in a simulation that gives known-truth agreement for the
 #'   risk-coverage curve. `NULL` or 0 disables the simulation.
+#' @param mismatch_repeats Number of independent label-swap simulations whose
+#'   results are pooled to tune the cutoffs and estimate sensitivity. More
+#'   repeats give a less extreme annotation cutoff and better sensitivity at
+#'   the cost of roughly proportional simulation time. Use 1 for a single
+#'   draw.
 #' @param min_accuracy Target agreement among samples that receive a
 #'   prediction. The abstention cutoff is the lowest top-versus-second margin
 #'   at which simulated true-label agreement (observed agreement when the
@@ -57,6 +64,10 @@
 #'   candidate). They can still be flagged as suspicious when the annotation
 #'   margin is large, but never receive a candidate correction; if the target is never reached, all
 #'   samples abstain.
+#' @param detect_unknown If `FALSE`, unknown-individual detection is switched
+#'   off: no stranger validation is run, no sample is marked as a potential
+#'   unknown individual, and abstention uses only the abstention cutoff.
+#'   `feasibility$unknown_individual_detection` is `"not_assessed"`.
 #' @param unknown_mad Samples whose top margin is below
 #'   `median - unknown_mad * MAD` of the log top margin of enrolled samples
 #'   abstain and are marked as potential unknown individuals. No share of samples is forced to be unknown.
@@ -84,9 +95,11 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               progress = interactive(), cv_folds = NULL,
                               min_agreement = 0.7, margin_coverage = 0.95,
                               refit_clean = TRUE, mismatch_rate = 0.1,
-                              min_accuracy = 0.9, unknown_mad = 3,
+                              min_accuracy = 0.9, detect_unknown = TRUE,
+                              unknown_mad = 3,
                               grouped_unknown_validation = FALSE,
-                              unknown_stray_samples = 2L) {
+                              unknown_stray_samples = 2L,
+                              mismatch_repeats = 3L) {
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -122,6 +135,12 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       target_specificity <= 0 || target_specificity >= 1) {
     stop("target_specificity must be a single number between 0 and 1.")
   }
+  if (!is.numeric(mismatch_repeats) || length(mismatch_repeats) != 1L ||
+      !is.finite(mismatch_repeats) || mismatch_repeats < 1L ||
+      mismatch_repeats != floor(mismatch_repeats)) {
+    stop("mismatch_repeats must be a positive integer.")
+  }
+  mismatch_repeats <- as.integer(mismatch_repeats)
   if (!is.null(cv_folds) &&
       (!is.numeric(cv_folds) || is.complex(cv_folds) ||
        length(cv_folds) != 1L || !is.finite(cv_folds) ||
@@ -192,19 +211,24 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       100 * oof_agreement, 100 * min_agreement
     ))
   }
-  if (oof_agreement < min_agreement) {
-    stop(sprintf(
+  low_agreement <- oof_agreement < min_agreement
+  if (low_agreement) {
+    warning(sprintf(
       paste("Out-of-fold identity agreement (%.1f%%) is below the required",
-            "minimum (%.1f%%); calibration was not attempted."),
+            "minimum (%.1f%%); all predictions are returned as",
+            "insufficient_evidence and thresholds are unreliable."),
       100 * oof_agreement, 100 * min_agreement
-    ))
+    ), call. = FALSE)
   }
 
   top_margin <- margins$top_margin
   annotation_margin <- margins$annotation_margin
-  top_margin_threshold <- unname(stats::quantile(
-    top_margin[correct_identity], probs = margin_coverage, type = 1
-  ))
+  top_margin_threshold <- if (any(correct_identity)) {
+    unname(stats::quantile(top_margin[correct_identity],
+                           probs = margin_coverage, type = 1))
+  } else {
+    Inf
+  }
   confidently_misassigned <- !correct_identity &
     annotation_margin > top_margin_threshold
   if (isTRUE(progress)) {
@@ -218,7 +242,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   held_out_ids <- rownames(x)[confidently_misassigned]
   n_samples_first_pass <- nrow(x)
   dropped_individuals <- character()
-  if (isTRUE(refit_clean) && any(confidently_misassigned)) {
+  if (isTRUE(refit_clean) && any(confidently_misassigned) && !low_agreement) {
     clean_counts <- table(factor(y[!confidently_misassigned],
                                  levels = names(class_counts)))
     dropped_individuals <- names(clean_counts)[clean_counts < 2L]
@@ -257,7 +281,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # Every wrong identity as a false label: margin = top score - that score.
   is_observed <- col(oof_scores) == class_index
   false_margin <- (margins$top_score - oof_scores)[!is_observed]
-  unknown <- .unknown_validation(
+  validate_unknown <- function() .unknown_validation(
     x, y, shrinkage, exclude = confidently_misassigned, progress = progress,
     n_strays = as.integer(unknown_stray_samples),
     n_folds = if (is.null(cv_folds) || !isTRUE(grouped_unknown_validation)) {
@@ -266,9 +290,18 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       n_folds
     }
   )
+  unknown <- if (!detect_unknown) {
+    list(n = 0L, top_margin = numeric())
+  } else if (low_agreement) {
+    tryCatch(validate_unknown(), error = function(e) {
+      list(n = 0L, top_margin = numeric(), status = "insufficient_evidence")
+    })
+  } else {
+    validate_unknown()
+  }
   simulation <- NULL
   clean_counts <- table(y[reference])
-  if (!is.null(mismatch_rate) && mismatch_rate > 0 &&
+  if (!low_agreement && !is.null(mismatch_rate) && mismatch_rate > 0 &&
       sum(clean_counts >= 2L) >= 2L) {
     clean <- reference & y %in% names(clean_counts)[clean_counts >= 2L]
     if (isTRUE(progress)) {
@@ -277,11 +310,22 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         100 * mismatch_rate, sum(clean)
       ))
     }
-    simulation <- .simulate_mismatches(
-      x[clean, , drop = FALSE], y[clean], mismatch_rate,
-      if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
-      refit_clean
-    )
+    draws <- lapply(seq_len(mismatch_repeats), function(r) {
+      if (isTRUE(progress) && mismatch_repeats > 1L) {
+        message(sprintf("Label-swap simulation %d/%d.", r, mismatch_repeats))
+      }
+      draw <- .simulate_mismatches(
+        x[clean, , drop = FALSE], y[clean], mismatch_rate,
+        if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
+        refit_clean
+      )
+      if (!is.null(draw)) draw$repeat_id <- r
+      draw
+    })
+    draws <- draws[!vapply(draws, is.null, logical(1))]
+    if (length(draws)) {
+      simulation <- do.call(rbind, draws)
+    }
   }
   # Real mislabels resemble the simulated swaps, not every possible wrong
   # label (many of which are easily confused identities with tiny margins), so
@@ -324,8 +368,11 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   abstain_threshold <- .abstention_threshold(
     known$margin, known$correct, min_accuracy
   )$threshold
-  unknown_threshold <- .unknown_margin_threshold(top_margin[reference],
-                                                 unknown_mad)
+  unknown_threshold <- if (detect_unknown) {
+    .unknown_margin_threshold(top_margin[reference], unknown_mad)
+  } else {
+    -Inf
+  }
   low_margin <- top_margin < max(abstain_threshold, unknown_threshold)
   unknown_flag <- top_margin < unknown_threshold
   confident_prediction <- !low_margin
@@ -395,11 +442,13 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     abstain_reason_counts = abstain_reason_counts,
     min_accuracy = min_accuracy,
     first_pass_agreement = first_pass_agreement,
+    low_agreement = low_agreement,
     oof_agreement = oof_agreement,
     dropped_individuals = dropped_individuals,
     n_confidently_misassigned = sum(confidently_misassigned),
     mismatch_simulation = if (is.null(simulation)) NULL else list(
       rate = mismatch_rate,
+      repeats = length(unique(simulation$repeat_id)),
       n_samples = nrow(simulation),
       n_misannotated = sum(simulation$actually_misannotated),
       n_confidently_misassigned = sum(simulation$confidently_misassigned),
@@ -467,7 +516,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     } else {
       "unreliable"
     }
-    unknown_status <- if (unknown$n < 10L) {
+    unknown_status <- if (!detect_unknown) {
+      "not_assessed"
+    } else if (unknown$n < 10L) {
       "insufficient_evidence"
     } else if (is.finite(unknown_metrics$sensitivity) &&
                unknown_metrics$sensitivity >= 0.8) {
@@ -516,6 +567,29 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
            "no_confident_prediction",
            "no_evidence_of_incorrect_annotation"))))
   )
+  if (low_agreement) {
+    # Thresholds were tuned on predictions that mostly disagree with the
+    # observed labels, so no call is trustworthy; raw scores and margins stay.
+    predictions$predicted_id_clean <- NA_character_
+    predictions$confident_prediction <- FALSE
+    predictions$suspicious <- NA
+    predictions$potential_unknown_individual <- if (detect_unknown) NA else FALSE
+    predictions$most_likely_alternative <- NA_character_
+    predictions$candidate_correction <- NA_character_
+    predictions$annotation_status <- "insufficient_evidence"
+    if (!is.null(feasibility)) {
+      feasibility$misannotation_detection <- "insufficient_evidence"
+      feasibility$identity_recovery <- "insufficient_evidence"
+      if (detect_unknown) {
+        feasibility$unknown_individual_detection <- "insufficient_evidence"
+      }
+      feasibility$warning <- paste(
+        sprintf("Out-of-fold agreement (%.1f%%) is below min_agreement (%.1f%%);",
+                100 * first_pass_agreement, 100 * min_agreement),
+        "all samples are reported as insufficient_evidence."
+      )
+    }
+  }
 
   list(
     predictions = predictions,
