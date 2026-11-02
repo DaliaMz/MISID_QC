@@ -104,15 +104,24 @@ make_tissue_scenario <- function(n_labels, n_per_label, set) {
   }))
 }
 
-make_individual_scenario <- function(n_labels, n_per_label, set, n_tissues = 8L) {
+# n_per_label = Inf means "as many as possible": all samples of the donors
+# covered by the most tissues in the set. A donor has at most about one sample
+# per tissue, so n_tissues grows with n_per_label (at least 8).
+make_individual_scenario <- function(n_labels, n_per_label, set, n_tissues = NULL) {
   pool <- meta_all[, .N, by = SMTSD][N >= min_tissue_samples, SMTSD]
+  if (is.null(n_tissues)) {
+    n_tissues <- if (is.finite(n_per_label)) max(8L, as.integer(n_per_label)) else 20L
+  }
   tis <- pick_labels(sim_smtsd, pool, n_tissues, set)
   d <- meta_all[SMTSD %in% tis]
-  elig <- d[, .N, by = ID][N >= n_per_label, ID]
+  counts <- d[, .N, by = ID]
+  elig <- if (is.finite(n_per_label)) counts[N >= n_per_label, ID] else
+    counts[order(-N)][N >= 4L, ID]
   if (length(elig) < 5L) return(NULL)
-  keep <- sample(elig, min(n_labels, length(elig)))
+  keep <- if (is.finite(n_per_label)) sample(elig, min(n_labels, length(elig))) else
+    head(elig, n_labels)
   d <- d[ID %in% keep][sample(.N)]
-  d <- d[, head(.SD, n_per_label), by = ID]
+  if (is.finite(n_per_label)) d <- d[, head(.SD, n_per_label), by = ID]
   d[, label_true := ID]
   d[, tissues := paste(tis, collapse = "|")]
   d
@@ -152,7 +161,7 @@ grid <- rbind(
   CJ(task = "individual",
      set = c("similar", "random", "dissimilar"),
      n_labels = c(20, 40),
-     n_per_label = c(4, 6),
+     n_per_label = c(4, 7, 10, 15, 20, Inf),
      misid_rate = c(0, 0.05, 0.1, 0.2),
      rep = 1:3)
 )

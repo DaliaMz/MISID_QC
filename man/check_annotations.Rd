@@ -5,7 +5,7 @@
 check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
-  min_agreement = 0.7, margin_coverage = 0.95, refit_clean = TRUE,
+  min_agreement = 0.7, margin_coverage = 0.025, refit_clean = TRUE,
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
   unknown_mad = 3,
   grouped_unknown_validation = FALSE,
