@@ -66,6 +66,26 @@ stopifnot(is.data.frame(plot_risk_coverage(result)))
 invisible(dev.off())
 stopifnot(all(is.na(result$predictions$candidate_correction)))
 
+set.seed(12)
+diagnostic_result <- check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  diagnostics = TRUE
+)
+stopifnot(all(c("first_pass", "first_pass_scores", "final_pass",
+                "annotation_threshold", "abstention", "unknown", "gates") %in%
+              names(diagnostic_result$diagnostics)))
+stopifnot(identical(
+  diagnostic_result$diagnostics$first_pass$sample_id, samples
+))
+stopifnot(setequal(
+  diagnostic_result$held_out$sample_ids,
+  diagnostic_result$diagnostics$first_pass$sample_id[
+    diagnostic_result$diagnostics$first_pass$held_out
+  ]
+))
+stopifnot(nrow(diagnostic_result$diagnostics$annotation_threshold) > 0L)
+stopifnot(nrow(diagnostic_result$diagnostics$abstention$curve) > 0L)
+
 cv_progress_messages <- character()
 withCallingHandlers(
   cv_result <- check_annotations(expression, metadata, "sample", "individual",

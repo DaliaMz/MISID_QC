@@ -44,6 +44,51 @@ these summaries are not independent estimates and should not be used as
 confirmed error rates. Candidate corrections are emitted only when both
 misannotation detection and identity recovery appear feasible.
 
+To inspect the individual stages and plot the margins and cutoffs, load the
+development version and request diagnostics:
+
+```r
+devtools::load_all()
+result <- check_annotations(
+  expression_matrix, sample_metadata, "sample", "individual",
+  diagnostics = TRUE
+)
+source("scripts/plot_check_annotation_gates.R")
+diagnostic_tables <- plot_check_annotation_gates(
+  result, file = "annotation-gates.pdf"
+)
+
+diagnostic_tables$first_pass
+diagnostic_tables$final_pass
+diagnostic_tables$annotation_threshold
+```
+
+The PDF plots the first-pass agreement gate, the first-pass exclusion margins,
+the annotation-threshold populations, abstention accuracy/coverage, unknown
+individual margins, and feasibility gates. The first-pass table is kept
+separate from the final/refit table so a post-refit disagreement is not
+mistaken for a first-pass holdout. Diagnostics are opt-in because they retain
+additional intermediate score and margin data.
+
+For one saved GTEx simulation scenario, install the current package with
+`R CMD INSTALL .` and run from the repository root:
+
+```sh
+Rscript scripts/run_gtex_scenario_diagnostics.R \
+  scenario=12 \
+  scenarios_file=simulations/results/gtex_scenarios.rds \
+  expr=/path/to/GTEx_v11_VST.rds
+```
+
+The wrapper uses the scenario's observed labels, selects the top variable
+features within that scenario (default 2,000, matching the GTEx runner),
+disables unknown-individual detection, and writes a gate PDF and an RDS bundle
+to `simulations/results/gtex_diagnostics/`. Pass `out=...`, `n_features=...`,
+`cv_folds=...` (or `cv_folds=loo`), and the other supported diagnostic settings
+to change defaults. The simulation seed is used by default; `seed=...` can
+override it. The RDS includes the full result, diagnostic tables, scenario
+truth and parameters.
+
 This version does not normalize raw counts, select features, or account for
 tissue/batch covariates. Supply appropriately transformed expression values
 and consider tissue-related expression variation in the interpretation.

@@ -56,6 +56,9 @@
 #'   repeats give a less extreme annotation cutoff and better sensitivity at
 #'   the cost of roughly proportional simulation time. Use 1 for a single
 #'   draw.
+#' @param diagnostics Whether to include intermediate gate data in the result.
+#'   This is intended for understanding and plotting the validation steps; it
+#'   can add substantially to the result size.
 #' @param min_accuracy Target agreement among samples that receive a
 #'   prediction. The abstention cutoff is the lowest top-versus-second margin
 #'   at which simulated true-label agreement (observed agreement when the
@@ -99,7 +102,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               unknown_mad = 3,
                               grouped_unknown_validation = FALSE,
                               unknown_stray_samples = 2L,
-                              mismatch_repeats = 3L) {
+                              mismatch_repeats = 3L, diagnostics = FALSE) {
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -150,6 +153,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
     stop("progress must be TRUE or FALSE.")
+  }
+  if (!is.logical(diagnostics) || length(diagnostics) != 1L ||
+      is.na(diagnostics)) {
+    stop("diagnostics must be TRUE or FALSE.")
   }
 
   x <- t(expr)
@@ -241,6 +248,22 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   first_pass_agreement <- oof_agreement
   held_out_ids <- rownames(x)[confidently_misassigned]
   n_samples_first_pass <- nrow(x)
+  first_pass_diagnostics <- if (diagnostics) {
+    data.frame(
+      sample_id = rownames(x),
+      observed_id = y,
+      predicted_id = predicted_id,
+      correct = correct_identity,
+      top_margin = top_margin,
+      annotation_margin = annotation_margin,
+      exclusion_margin_threshold = top_margin_threshold,
+      held_out = confidently_misassigned,
+      stringsAsFactors = FALSE
+    )
+  } else {
+    NULL
+  }
+  first_pass_scores <- if (diagnostics) oof_scores else NULL
   dropped_individuals <- character()
   if (isTRUE(refit_clean) && any(confidently_misassigned) && !low_agreement) {
     clean_counts <- table(factor(y[!confidently_misassigned],
@@ -368,6 +391,22 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   abstain_threshold <- .abstention_threshold(
     known$margin, known$correct, min_accuracy
   )$threshold
+  abstention_candidates <- sort(unique(known$margin))
+  if (length(abstention_candidates) > 200L) {
+    abstention_candidates <- abstention_candidates[
+      unique(round(seq(1, length(abstention_candidates),
+                       length.out = 200L)))
+    ]
+  }
+  abstention_curve <- data.frame(
+    threshold = abstention_candidates,
+    n_retained = vapply(abstention_candidates, function(cutoff) {
+      sum(known$margin >= cutoff)
+    }, integer(1)),
+    agreement = vapply(abstention_candidates, function(cutoff) {
+      mean(known$correct[known$margin >= cutoff])
+    }, numeric(1))
+  )
   unknown_threshold <- if (detect_unknown) {
     .unknown_margin_threshold(top_margin[reference], unknown_mad)
   } else {
@@ -593,7 +632,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     }
   }
 
-  list(
+  result <- list(
     predictions = predictions,
     identity_scores = oof_scores,
     performance = performance,
@@ -614,4 +653,110 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       target_specificity = target_specificity
     )
   )
+  if (diagnostics) {
+    false_cells <- which(!is_observed, arr.ind = TRUE)
+    false_identity_margins <- data.frame(
+      sample_id = rownames(oof_scores)[false_cells[, 1L]],
+      alternative_id = colnames(oof_scores)[false_cells[, 2L]],
+      margin = margins$top_score[false_cells[, 1L]] -
+        oof_scores[false_cells],
+      stringsAsFactors = FALSE
+    )
+    simulated_positive_margins <- if (!is.null(simulation)) {
+      simulated <- simulation[simulation$actually_misannotated, ,
+                              drop = FALSE]
+      data.frame(
+        sample_id = simulated$sample_id,
+        identity = simulated$simulated_id,
+        population = "simulated_swap_positive",
+        margin = simulated$annotation_margin,
+        stringsAsFactors = FALSE
+      )
+    } else {
+      NULL
+    }
+    annotation_threshold_data <- data.frame(
+      sample_id = rownames(oof_scores)[reference],
+      identity = y[reference],
+      population = "reference_negative",
+      margin = annotation_margin[reference],
+      stringsAsFactors = FALSE
+    )
+    if (!is.null(simulated_positive_margins) &&
+        nrow(simulated_positive_margins)) {
+      annotation_threshold_data <- rbind(
+        annotation_threshold_data, simulated_positive_margins
+      )
+    } else {
+      false_identity_margins$population <- "all_wrong_identity_alternatives"
+      names(false_identity_margins)[names(false_identity_margins) ==
+                                     "alternative_id"] <- "identity"
+      annotation_threshold_data <- rbind(
+        annotation_threshold_data,
+        false_identity_margins[, names(annotation_threshold_data),
+                               drop = FALSE]
+      )
+    }
+    annotation_threshold_data$threshold <- margin_threshold
+    annotation_threshold_data$threshold_source <- if (
+      !is.null(simulated_positive_margins) &&
+      nrow(simulated_positive_margins)
+    ) "simulated_swaps" else "all_wrong_identities"
+
+    final_diagnostics <- data.frame(
+      sample_id = rownames(x),
+      observed_id = y,
+      predicted_id = predicted_id,
+      correct = correct_identity,
+      top_margin = top_margin,
+      annotation_margin = annotation_margin,
+      stringsAsFactors = FALSE
+    )
+    first_holdout_by_id <- setNames(first_pass_diagnostics$held_out,
+                                    first_pass_diagnostics$sample_id)
+    final_diagnostics$confidently_misassigned_first_pass <-
+      unname(first_holdout_by_id[final_diagnostics$sample_id])
+    final_diagnostics$confident_prediction <- predictions$confident_prediction
+    final_diagnostics$suspicious <- predictions$suspicious
+    final_diagnostics$potential_unknown_individual <-
+      predictions$potential_unknown_individual
+    final_diagnostics$candidate_correction <- predictions$candidate_correction
+    final_diagnostics$annotation_status <- predictions$annotation_status
+
+    result$diagnostics <- list(
+      first_pass = first_pass_diagnostics,
+      first_pass_scores = first_pass_scores,
+      final_pass = final_diagnostics,
+      annotation_threshold = annotation_threshold_data,
+      annotation_threshold_source = if (
+        !is.null(simulated_positive_margins) &&
+        nrow(simulated_positive_margins)
+      ) "simulated_swaps" else "all_wrong_identities",
+      abstention = list(
+        source = if (is.null(simulation)) "observed_reference" else
+          "simulated_true_labels",
+        threshold = abstain_threshold,
+        min_accuracy = min_accuracy,
+        curve = abstention_curve,
+        margins = known$margin,
+        correct = known$correct
+      ),
+      unknown = list(
+        enabled = detect_unknown,
+        threshold = unknown_threshold,
+        known_margins = top_margin[reference],
+        simulated_unknown_margins = unknown$top_margin,
+        metrics = unknown_metrics
+      ),
+      gates = list(
+        min_agreement = min_agreement,
+        first_pass_agreement = first_pass_agreement,
+        low_agreement = low_agreement,
+        target_specificity = target_specificity,
+        feasibility = feasibility,
+        performance = performance
+      )
+    )
+  }
+  result
 }

@@ -9,7 +9,8 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
   unknown_mad = 3,
   grouped_unknown_validation = FALSE,
-  unknown_stray_samples = 2L, mismatch_repeats = 3L)
+  unknown_stray_samples = 2L, mismatch_repeats = 3L,
+  diagnostics = FALSE)
 }
 \arguments{
 \item{expr}{Numeric expression matrix, features by samples, with unique
@@ -53,6 +54,9 @@ risk-coverage curve. \code{NULL} or 0 disables the simulation.}
 are pooled to tune the cutoffs and estimate sensitivity. More repeats give a less
 extreme annotation cutoff and better sensitivity at the cost of roughly
 proportional simulation time. Use 1 for a single draw.}
+\item{diagnostics}{Whether to include intermediate gate data in the result.
+This is intended for understanding and plotting the validation steps; it can
+add substantially to the result size.}
 \item{min_accuracy}{Target agreement among samples that receive a prediction.
 The abstention cutoff is the lowest top-versus-second margin at which simulated
 true-label agreement (observed agreement when the simulation is off) among
@@ -86,7 +90,9 @@ A list with sample-level \code{predictions}, raw \code{identity_scores},
 \code{performance}, \code{calibration}, \code{risk_coverage},
 \code{mismatch_simulation}, \code{held_out} (count, fraction and IDs of samples held
 out as confidently misassigned, from the first pass), \code{feasibility}, and
-\code{thresholds} components.
+\code{thresholds} components. If \code{diagnostics = TRUE}, the result also
+contains first-pass and final-pass sample margins, threshold populations,
+abstention-curve data, and gate inputs under \code{diagnostics}.
 }
 \description{
 Uses leave-one-sample-out shrinkage linear discriminant scores and internal
