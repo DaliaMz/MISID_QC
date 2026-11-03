@@ -1,3 +1,5 @@
+custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
+.libPaths(c(custom_lib, .libPaths()))
 
 library(data.table)
 library(tidyverse)

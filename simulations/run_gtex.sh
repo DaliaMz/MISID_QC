@@ -3,7 +3,7 @@
 #SBATCH --array=1-60%20
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
-#SBATCH --time=08:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/logs/gtex_misid_%A_%a.out
 #SBATCH --error=/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/logs/gtex_misid_%A_%a.err
 
@@ -12,8 +12,10 @@
 # Afterwards:   Rscript simulations/Aggregate_gtex_results.R
 #
 # 528 scenarios split over 60 array tasks (about 9 each). Change --array and
-# N_TASKS together; "%10" caps how many tasks run at once. A task that is
+# N_TASKS together; "%20" caps how many tasks run at once. A task that is
 # requeued or times out resumes, because finished scenarios are skipped.
+# Default RUN_ARGS compares 5-fold CV and leave-one-out (6 configs per scenario,
+# LOO being the slow ones); setting RUN_ARGS replaces these defaults entirely.
 
 set -euo pipefail
 module load r/4.5.1
@@ -27,7 +29,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 #   sbatch --export=ALL,RUN_ARGS="cv_folds=5 mismatch_repeats=1,3 target_specificity=0.9,0.95,0.99" simulations/run_gtex.sh
 #   sbatch --export=ALL,RUN_ARGS="cv_folds=loo subset=rep==1" simulations/run_gtex.sh
 # (no spaces or quotes inside RUN_ARGS values)
-RUN_ARGS="${RUN_ARGS:-margin_coverage=0.01,0.025,0.05}"
+RUN_ARGS="${RUN_ARGS:-cv_folds=5,loo margin_coverage=0.01,0.025,0.05}"
 
 # shellcheck disable=SC2086
 Rscript simulations/Run_across_GTEX_simulations.R \
