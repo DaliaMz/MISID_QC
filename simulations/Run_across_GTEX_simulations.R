@@ -117,6 +117,11 @@ score_scenario <- function(r, meta, seconds) {
   corr_v <- perf$correction_validation
   rec_true <- ratio(sum(p$predicted_id[bad] == truth[bad]), sum(bad))
   verdict <- r$feasibility$misannotation_detection
+  true_detection_feasible <- if (!any(bad)) {
+    isTRUE(spec >= 0.95)
+  } else {
+    isTRUE(sens >= 0.8) && isTRUE(spec >= 0.95)
+  }
   st <- table(factor(p$annotation_status, levels = all_statuses))
   out <- data.table(
     status = if (low) "low_agreement" else "ok",
@@ -124,14 +129,18 @@ score_scenario <- function(r, meta, seconds) {
     n_misid = sum(bad),
     first_pass_agreement = r$calibration$first_pass_agreement,
     auroc_annotation_margin = auroc(p$annotation_score_margin, bad),
-    auroc_top_margin = auroc(-p$top_score_margin, bad),
+    # correction: among truly mislabelled samples, does a larger top margin rank
+    # the predictions that recover the true identity higher?
+    auroc_top_margin = auroc(p$top_score_margin[bad],
+                             p$predicted_id[bad] == truth[bad]),
     tp = tp, fp = fp, fn = fn, tn = tn,
     sens_true = sens, spec_true = spec, precision_true = ratio(tp, tp + fp),
     sens_reported = rep_m$sensitivity, spec_reported = rep_m$specificity,
     sens_gap = rep_m$sensitivity - sens, spec_gap = rep_m$specificity - spec,
     verdict = verdict,
+    # Sensitivity is undefined for clean scenarios, so score those on specificity.
     verdict_correct = if (low) NA else (verdict == "appears_feasible") ==
-      (isTRUE(sens >= 0.8) && isTRUE(spec >= 0.95)),
+      true_detection_feasible,
     recovery_verdict = r$feasibility$identity_recovery,
     recovery_verdict_correct = if (low || is.na(rec_true)) NA else
       (r$feasibility$identity_recovery == "appears_feasible") == (rec_true >= 0.8),
@@ -159,7 +168,10 @@ score_scenario <- function(r, meta, seconds) {
       ratio(sum(p$candidate_correction[corr & bad] == truth[corr & bad]), sum(bad)),
     n_held = length(held), n_held_misid = sum(held_bad),
     held_precision = ratio(sum(held_bad), length(held)),
-    held_recall = ratio(sum(held_bad), sum(bad)),
+    # held-out samples come from the first pass over every input sample, so the
+    # denominators are the input totals, not the post-refit predictions
+    n_samples_input = nrow(meta), n_misid_input = sum(meta$is_misid),
+    held_recall = ratio(sum(held_bad), sum(meta$is_misid)),
     n_corrections = sum(corr),
     correction_accuracy = ratio(sum(p$candidate_correction[corr] == truth[corr]), sum(corr)),
     correction_recall = ratio(sum(p$candidate_correction[corr & bad] == truth[corr & bad]), sum(bad)),

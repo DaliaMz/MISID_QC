@@ -94,7 +94,10 @@ A list with sample-level \code{predictions}, raw \code{identity_scores},
 out as confidently misassigned, from the first pass), \code{feasibility}, and
 \code{thresholds} components. \code{predictions$annotation_status} is descriptive
 (flag, abstention, agreement) and does not depend on \code{feasibility};
-\code{"insufficient_evidence"} is only used when the minimum-agreement gate fails.
+\code{"insufficient_evidence"} is used when the minimum-agreement gate fails, and for
+unflagged samples of individuals dropped at the refit (fewer than two clean samples;
+\code{predictions$excluded_from_refit}). Samples held out in the first pass are always
+\code{suspicious}, and every input sample has a row.
 \code{performance$misannotation_detection} is validated on simulated swaps (see its
 \code{source} column), \code{performance$all_alternatives_detection} keeps the
 every-wrong-label diagnostic, and \code{performance$recovery_accuracy_misannotated}

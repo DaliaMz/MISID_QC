@@ -168,3 +168,28 @@ stopifnot(inherits(tryCatch(
   check_annotations(expression, metadata, "sample", "individual",
                     progress = FALSE, min_agreement = 1.01),
   warning = function(w) w), "warning"))
+
+# Individuals dropped at the refit and held-out samples still get a row and a call.
+set.seed(3)
+K <- 6; n <- 5
+true_ids <- rep(paste0("d", 1:K), each = n)
+cent <- diag(K) * 4
+X <- vapply(seq_along(true_ids), function(i) {
+  cent[match(true_ids[i], paste0("d", 1:K)), ] + rnorm(K, sd = 0.3)
+}, numeric(K))
+colnames(X) <- paste0("s", seq_along(true_ids))
+rownames(X) <- paste0("g", 1:K)
+obs_ids <- true_ids
+obs_ids[2:5] <- "d2"; obs_ids[c(6, 11)] <- "d1"
+dropped <- check_annotations(
+  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+  "individual", cv_folds = NULL, min_agreement = 0, progress = FALSE,
+  mismatch_repeats = 2
+)
+dp <- dropped$predictions
+stopifnot(identical(dp$sample_id, colnames(X)))
+stopifnot("d1" %in% dropped$calibration$dropped_individuals)
+stopifnot(all(dp$excluded_from_refit == (dp$observed_id %in% dropped$calibration$dropped_individuals)))
+stopifnot(all(dp$suspicious[dp$sample_id %in% dropped$held_out$sample_ids]))
+stopifnot(all(dp$annotation_status[dp$excluded_from_refit & dp$suspicious] ==
+                "suspicious_without_reliable_alternative"))

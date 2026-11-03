@@ -50,8 +50,11 @@ Other summaries use the same out-of-fold predictions for threshold selection and
 performance, so they are not independent estimates and should not be used as
 confirmed error rates. `annotation_status` is descriptive (flag, abstention,
 agreement) and is not overwritten by feasibility, which is reported separately
-in `results$feasibility`; `insufficient_evidence` only appears when the
-agreement gate fails. Candidate corrections are emitted only when identity
+in `results$feasibility`. Samples held out in the first pass are always
+`suspicious`, and every input sample has a row in `predictions`.
+`insufficient_evidence` appears when the agreement gate fails and for unflagged
+samples of individuals dropped at the refit (`excluded_from_refit`). Candidate
+corrections are emitted only when identity
 recovery on simulated misannotated samples appears feasible.
 
 To inspect the individual stages and plot the margins and cutoffs, load the

@@ -108,30 +108,34 @@ summarise_source <- function(path) {
   cfg_main <- if (nzchar(opt$cfg)) opt$cfg else cfgs$cfg[1]
   cat("Config for Q1-Q4:", cfg_main, "\n")
   d <- ok[cfg == cfg_main]
+  # Metrics about mislabelled samples are undefined at rate 0, so those use `dm`.
+  dm <- d[misid_rate > 0]
 
   # Q1
   graphics::par(mfrow = c(2, 2), mar = c(4.5, 4.5, 3, 1), oma = c(0, 0, 2, 0))
-  rate_panel(d, "sens_true", "True sensitivity", "Q1: mislabels detected", hline = 0.8)
+  rate_panel(dm, "sens_true", "True sensitivity", "Q1: mislabels detected", hline = 0.8)
   rate_panel(d, "spec_true", "True specificity", "Q1/Q7: correct labels not flagged (rate 0 = false positives)", hline = 0.95)
-  rate_panel(d, "auroc_annotation_margin", "AUROC", "Q1: annotation-margin ranking")
-  rate_panel(d, "correction_accuracy", "Correction accuracy", "Q1: proposed corrections that are right")
+  rate_panel(dm, "auroc_annotation_margin", "AUROC", "Q1: annotation-margin ranking")
+  rate_panel(dm, "correction_accuracy", "Correction accuracy", "Q1: proposed corrections that are right")
   graphics::mtext(paste(label, "- Q1: how well does it work?"), outer = TRUE, font = 2)
 
   # Q2
   graphics::par(mfrow = c(2, 2))
-  gap_panel(d, "sens_gap", "Q2: sensitivity, reported - true")
+  gap_panel(dm, "sens_gap", "Q2: sensitivity, reported - true")
   gap_panel(d, "spec_gap", "Q2: specificity, reported - true")
-  gap_panel(d, "recovery_gap", "Q2: recovery on swapped samples, reported - true")
-  gap_panel(d, "correction_precision_gap", "Q2: correction precision, reported - true")
+  gap_panel(dm, "recovery_gap", "Q2: recovery on swapped samples, reported - true")
+  gap_panel(dm, "correction_precision_gap", "Q2: correction precision, reported - true")
   graphics::mtext(paste(label, "- Q2: how far are its estimates from the truth? (red = binned mean)"),
                   outer = TRUE, font = 2)
 
   # Q3
   d[, bin := cut(first_pass_agreement, agreement_breaks, labels = agreement_labels)]
+  dm[, bin := cut(first_pass_agreement, agreement_breaks, labels = agreement_labels)]
   graphics::par(mfrow = c(1, 2))
   for (v in c("verdict_correct", "recovery_verdict_correct")) {
     if (!v %in% names(d)) next
-    m <- d[!is.na(get(v)), .(rate = mean(get(v)), n = .N), by = bin][order(bin)]
+    dv <- if (v == "recovery_verdict_correct") dm else d
+    m <- dv[!is.na(get(v)), .(rate = mean(get(v)), n = .N), by = bin][order(bin)]
     mids <- graphics::barplot(m$rate, names.arg = as.character(m$bin), ylim = c(0, 1),
                               xlab = "First-pass agreement", ylab = "Verdict matches the truth",
                               main = paste("Q3:", sub("_", " ", v)), col = "steelblue")
@@ -141,15 +145,15 @@ summarise_source <- function(path) {
 
   # Q4
   graphics::par(mfrow = c(1, 2))
-  rate_panel(d, "held_precision", "Held out that are truly mislabelled", "Q4: holdout precision")
-  rate_panel(d, "held_recall", "Mislabelled that are held out", "Q4: holdout recall")
+  rate_panel(dm, "held_precision", "Held out that are truly mislabelled", "Q4: holdout precision")
+  rate_panel(dm, "held_recall", "Mislabelled that are held out", "Q4: holdout recall")
   graphics::mtext(paste(label, "- Q4: does the first-pass holdout work?"), outer = TRUE, font = 2)
 
   # Q5
   if (nrow(cfgs) > 1L) {
     graphics::par(mfrow = c(2, 2))
     for (v in c("sens_true", "sens_gap", "spec_gap", "correction_precision_gap")) {
-      vals <- ok[is.finite(get(v))]
+      vals <- ok[is.finite(get(v)) & (v == "spec_gap" | misid_rate > 0)]
       if (!nrow(vals)) { graphics::plot.new(); next }
       graphics::boxplot(vals[[v]] ~ vals$cfg, las = 2, cex.axis = 0.5, xlab = "",
                         ylab = v, main = paste("Q5:", v), col = "grey85")
@@ -160,18 +164,20 @@ summarise_source <- function(path) {
 
   # Console summary of the key numbers.
   cat("\nQ2/Q3 by first-pass agreement (config", cfg_main, "):\n")
-  print(d[, .(n = .N, sens_gap = round(mean(sens_gap, na.rm = TRUE), 3),
-              spec_gap = round(mean(spec_gap, na.rm = TRUE), 3),
-              recovery_gap = round(mean(recovery_gap, na.rm = TRUE), 3),
-              verdict_correct = round(mean(verdict_correct, na.rm = TRUE), 3)),
-          by = bin][order(bin)])
+  print(merge(
+    d[, .(n = .N, spec_gap = round(mean(spec_gap, na.rm = TRUE), 3),
+          verdict_correct = round(mean(verdict_correct, na.rm = TRUE), 3)), by = bin],
+    dm[, .(n_misid_scenarios = .N, sens_gap = round(mean(sens_gap, na.rm = TRUE), 3),
+           recovery_gap = round(mean(recovery_gap, na.rm = TRUE), 3)), by = bin],
+    by = "bin", all = TRUE)[order(bin)])
   cat("\nQ1/Q7 by mislabel rate:\n")
-  print(d[, .(n = .N, sens = round(mean(sens_true, na.rm = TRUE), 3),
-              spec = round(mean(spec_true, na.rm = TRUE), 3),
+  print(d[, .(n = .N, spec = round(mean(spec_true, na.rm = TRUE), 3),
+              sens = round(mean(sens_true, na.rm = TRUE), 3),
               auroc = round(mean(auroc_annotation_margin, na.rm = TRUE), 3),
               held_precision = round(mean(held_precision, na.rm = TRUE), 3),
               held_recall = round(mean(held_recall, na.rm = TRUE), 3)),
-          by = misid_rate][order(misid_rate)])
+          by = misid_rate][order(misid_rate)][misid_rate == 0,
+            c("sens", "auroc", "held_precision", "held_recall") := NA_real_][])
   invisible()
 }
 

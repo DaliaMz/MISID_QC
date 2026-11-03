@@ -93,8 +93,11 @@
 #'   confidently misassigned, from the first pass), `feasibility`, and
 #'   `thresholds` components. `predictions$annotation_status` is descriptive
 #'   (flag, abstention, agreement) and does not depend on `feasibility`;
-#'   `"insufficient_evidence"` is only used when the minimum-agreement gate
-#'   fails. `performance$misannotation_detection` is validated on simulated
+#'   `"insufficient_evidence"` is used when the minimum-agreement gate fails,
+#'   and for unflagged samples of individuals dropped at the refit (fewer than
+#'   two clean samples; `predictions$excluded_from_refit`). Samples held out in
+#'   the first pass are always `suspicious`, and every input sample has a row.
+#'   `performance$misannotation_detection` is validated on simulated
 #'   swaps (see its `source` column), `performance$all_alternatives_detection`
 #'   keeps the every-wrong-label diagnostic, and
 #'   `performance$recovery_accuracy_misannotated` and
@@ -258,6 +261,15 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   first_pass_agreement <- oof_agreement
   held_out_ids <- rownames(x)[confidently_misassigned]
   n_samples_first_pass <- nrow(x)
+  # Kept so samples dropped at the refit can still be reported.
+  first_pass_all <- data.frame(
+    sample_id = rownames(x), observed_id = y, predicted_id = predicted_id,
+    observed_id_score = margins$observed_score,
+    top_candidate_score = margins$top_score,
+    top_margin = top_margin, annotation_margin = annotation_margin,
+    confidently_misassigned = confidently_misassigned,
+    stringsAsFactors = FALSE
+  )
   first_pass_diagnostics <- if (diagnostics) {
     data.frame(
       sample_id = rownames(x),
@@ -446,7 +458,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # Flagging depends on the annotation margin alone: a clearly beaten observed
   # label is suspicious even when the top margin is too small to name the
   # replacement, which needs a confident prediction.
-  flagged <- annotation_margin > margin_threshold
+  # Samples held out in the first pass are always flagged: they were already
+  # judged misassigned and are not in the reference set. Reference-only metrics
+  # below are unaffected.
+  flagged <- annotation_margin > margin_threshold | confidently_misassigned
 
   # Every wrong label as a false label: a broad robustness diagnostic that
   # also includes easily confused identities real swaps rarely involve.
@@ -596,6 +611,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       predicted_id, NA_character_
     ),
     candidate_correction = NA_character_,
+    excluded_from_refit = FALSE,
     stringsAsFactors = FALSE
   )
   performance <- list(
@@ -838,6 +854,40 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         performance = performance
       )
     )
+  }
+  # Samples of individuals dropped at the refit have no clean model for their
+  # observed label, so they get no refit scores, but they are still reported:
+  # held-out ones as suspicious, the rest as insufficient evidence.
+  if (length(dropped_individuals)) {
+    gone <- first_pass_all[first_pass_all$observed_id %in% dropped_individuals, ,
+                           drop = FALSE]
+    held_gone <- gone$confidently_misassigned
+    result$predictions <- rbind(result$predictions, data.frame(
+      sample_id = gone$sample_id,
+      observed_id = gone$observed_id,
+      predicted_id = gone$predicted_id,
+      predicted_id_clean = NA_character_,
+      confident_prediction = FALSE,
+      observed_id_score = gone$observed_id_score,
+      top_candidate_score = gone$top_candidate_score,
+      top_vs_observed_score_margin = gone$annotation_margin,
+      top_score_margin = gone$top_margin,
+      annotation_score_margin = gone$annotation_margin,
+      confidently_misassigned = held_gone,
+      annotation_correctness_probability = NA_real_,
+      suspicious = if (low_agreement) NA else held_gone,
+      potential_unknown_individual = if (detect_unknown) NA else FALSE,
+      most_likely_alternative = NA_character_,
+      candidate_correction = NA_character_,
+      annotation_status = ifelse(held_gone,
+                                 "suspicious_without_reliable_alternative",
+                                 "insufficient_evidence"),
+      excluded_from_refit = TRUE,
+      stringsAsFactors = FALSE
+    ))
+    result$predictions <- result$predictions[
+      match(colnames(expr), result$predictions$sample_id), , drop = FALSE]
+    rownames(result$predictions) <- NULL
   }
   result
 }
