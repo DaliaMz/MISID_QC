@@ -66,6 +66,37 @@ stopifnot(is.data.frame(plot_risk_coverage(result)))
 invisible(dev.off())
 stopifnot(all(is.na(result$predictions$candidate_correction)))
 
+# Detection is validated on simulated swaps; sensitivity is cross-fitted when
+# at least two repeats are available and in-sample otherwise.
+stopifnot(all(c("all_alternatives_detection",
+                "recovery_accuracy_misannotated",
+                "correction_validation") %in% names(result$performance)))
+stopifnot(result$performance$misannotation_detection$source %in%
+            c("simulated_swaps_cross_fitted", "simulated_swaps_in_sample"))
+stopifnot(result$performance$misannotation_detection$n_repeats_validated <= 3L)
+
+# Feasibility never overwrites sample statuses.
+no_feasibility <- check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  assess_feasibility = FALSE
+)
+stopifnot(!any(no_feasibility$predictions$annotation_status ==
+                 "insufficient_evidence"))
+stopifnot(!any(result$predictions$annotation_status == "insufficient_evidence"))
+
+swap_data <- data.frame(
+  annotation_margin = c(10, 11, 12, 13, 14, 15),
+  actually_misannotated = TRUE,
+  repeat_id = rep(1:3, each = 2)
+)
+crossfit <- SampleAnnotationLikelihood:::.crossfit_swap_detection(
+  negatives = c(0, 0.1, 0.2, 0.3), swap_data, target_specificity = 0.95
+)
+stopifnot(crossfit$n_repeats == 3L, crossfit$sensitivity == 1)
+stopifnot(is.null(SampleAnnotationLikelihood:::.crossfit_swap_detection(
+  c(0, 0.1), swap_data[swap_data$repeat_id == 1L, ], 0.95
+)))
+
 set.seed(12)
 diagnostic_result <- check_annotations(
   expression, metadata, "sample", "individual", progress = FALSE,

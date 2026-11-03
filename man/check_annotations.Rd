@@ -51,9 +51,11 @@ applies to the first pass.}
 pairwise in a simulation that gives known-truth agreement for the
 risk-coverage curve. \code{NULL} or 0 disables the simulation.}
 \item{mismatch_repeats}{Number of independent label-swap simulations whose results
-are pooled to tune the cutoffs and estimate sensitivity. More repeats give a less
-extreme annotation cutoff and better sensitivity at the cost of roughly
-proportional simulation time. Use 1 for a single draw.}
+are pooled to tune the annotation cutoff. With at least two repeats, detection
+sensitivity is cross-fitted: each repeat is scored with a cutoff tuned on the
+other repeats. More repeats give a less extreme cutoff and a steadier
+sensitivity estimate at the cost of roughly proportional simulation time. With 1,
+sensitivity is in-sample.}
 \item{diagnostics}{Whether to include intermediate gate data in the result.
 This is intended for understanding and plotting the validation steps; it can
 add substantially to the result size.}
@@ -90,7 +92,16 @@ A list with sample-level \code{predictions}, raw \code{identity_scores},
 \code{performance}, \code{calibration}, \code{risk_coverage},
 \code{mismatch_simulation}, \code{held_out} (count, fraction and IDs of samples held
 out as confidently misassigned, from the first pass), \code{feasibility}, and
-\code{thresholds} components. If \code{diagnostics = TRUE}, the result also
+\code{thresholds} components. \code{predictions$annotation_status} is descriptive
+(flag, abstention, agreement) and does not depend on \code{feasibility};
+\code{"insufficient_evidence"} is only used when the minimum-agreement gate fails.
+\code{performance$misannotation_detection} is validated on simulated swaps (see its
+\code{source} column), \code{performance$all_alternatives_detection} keeps the
+every-wrong-label diagnostic, and \code{performance$recovery_accuracy_misannotated}
+and \code{performance$correction_validation} report recovery on simulated
+misannotated samples and the precision and recall of proposed corrections.
+Candidate corrections require identity recovery to appear feasible. If
+\code{diagnostics = TRUE}, the result also
 contains first-pass and final-pass sample margins, threshold populations,
 abstention-curve data, and gate inputs under \code{diagnostics}.
 }

@@ -16,6 +16,10 @@ custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
 #              "similar" should make donor discrimination easier because
 #              tissue variance is smaller.
 #
+# The grid now uses only "random" sets (set `keep_sets` before sourcing to
+# change this); the other sets stay in the scenario numbering so scenario
+# numbers and seeds match earlier runs.
+#
 # Only sample IDs and labels are stored per scenario (small). Expression is
 # sliced from the full matrix when a scenario is run: build_gtex_dataset().
 #
@@ -151,6 +155,15 @@ build_gtex_dataset <- function(meta, n_features = 2000) {
 
 # ---- Scenario grid ------------------------------------------------------------
 
+# Scenario numbers (and seeds) come from the full original grid, in its
+# original order, with the extra high-rate block appended. Tissue sets are
+# filtered afterwards, so the remaining scenarios keep the numbers and seeds of
+# earlier runs and results can be compared scenario by scenario.
+if (!exists("keep_sets")) keep_sets <- "random"
+# Smaller benchmark subset: fewer mislabel rates and fewer samples-per-label
+# levels for the individual task. Set these before sourcing to change them.
+if (!exists("keep_rates")) keep_rates <- c(0, 0.05, 0.1, 0.2, 0.4)
+if (!exists("keep_individual_n")) keep_individual_n <- c(4, 10, Inf)
 grid <- rbind(
   CJ(task = "tissue",
      set = c("random", "similar"),
@@ -163,10 +176,19 @@ grid <- rbind(
      n_labels = c(20, 40),
      n_per_label = c(4, 7, 10, 15, 20, Inf),
      misid_rate = c(0, 0.05, 0.1, 0.2),
+     rep = 1:3),
+  # Extra high mislabel rates, to reach low first-pass agreement and see where
+  # the internal estimates stop matching the truth.
+  CJ(task = "tissue", set = "random", n_labels = c(6, 12),
+     n_per_label = c(10, 20), misid_rate = c(0.3, 0.4), rep = 1:3),
+  CJ(task = "individual", set = "random", n_labels = c(20, 40),
+     n_per_label = c(4, 7, 10, 15, 20, Inf), misid_rate = c(0.3, 0.4),
      rep = 1:3)
 )
 grid[, scenario := .I]
 grid[, seed := 5000L + scenario]
+grid <- grid[set %in% keep_sets & misid_rate %in% keep_rates &
+               (task == "tissue" | n_per_label %in% keep_individual_n)]
 
 simulate_gtex_grid <- function(grid) {
   res <- lapply(seq_len(nrow(grid)), function(i) {

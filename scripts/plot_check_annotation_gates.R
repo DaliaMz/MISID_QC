@@ -33,31 +33,46 @@ plot_check_annotation_gates <- function(result, file = NULL) {
     }
   }
 
-  graphics::par(mfrow = c(1, 1))
   gate <- diagnostics$gates
-  graphics::plot(
-    c(0, 1), c(0, 1), type = "n", xlim = c(0.5, 2.5), ylim = c(0, 1),
-    xaxt = "n", xlab = "", ylab = "Agreement",
-    main = "Gate 1: first-pass observed-label agreement"
+  thr <- first$exclusion_margin_threshold[1L]
+  status <- sprintf(
+    "First-pass agreement %.1f%% (required %.1f%%): %s",
+    100 * gate$first_pass_agreement, 100 * gate$min_agreement,
+    if (gate$low_agreement) "below gate, downstream calls suppressed" else "passed"
   )
-  graphics::axis(1, at = 1:2, labels = c("Observed", "Required"))
-  graphics::segments(1, 0, 1, gate$first_pass_agreement,
-                     lwd = 8, col = "steelblue")
-  graphics::segments(2, 0, 2, gate$min_agreement,
-                     lwd = 8, col = "grey60")
-  graphics::text(1:2, c(gate$first_pass_agreement, gate$min_agreement),
-                 labels = sprintf("%.1f%%",
-                                  100 * c(gate$first_pass_agreement,
-                                          gate$min_agreement)),
-                 pos = 3)
-  graphics::mtext(
-    if (gate$low_agreement) {
-      "Below gate: downstream calls are suppressed"
-    } else {
-      "Passed"
-    },
-    side = 3, col = if (gate$low_agreement) "firebrick" else "darkgreen"
-  )
+  grp <- factor(ifelse(first$correct, "Predicted = observed",
+                       "Predicted != observed"),
+                levels = c("Predicted = observed", "Predicted != observed"))
+  cols <- c("steelblue", "firebrick")
+  margin_box <- function(values, ylab, main, cutoff = NULL) {
+    keep <- is.finite(values)
+    y <- log10(1 + values[keep])
+    g <- grp[keep]
+    graphics::boxplot(
+      y ~ g, col = grDevices::adjustcolor(cols, 0.4), outline = FALSE,
+      ylim = range(c(y, 0), finite = TRUE), xlab = "", ylab = ylab,
+      main = main, drop = FALSE
+    )
+    graphics::stripchart(
+      y ~ g, vertical = TRUE, method = "jitter", add = TRUE, pch = 16,
+      cex = 0.6, col = grDevices::adjustcolor(cols, 0.5)
+    )
+    graphics::mtext(sprintf("n = %d", as.integer(table(g))),
+                    side = 1, at = 1:2, line = 2.5, cex = 0.8)
+    if (!is.null(cutoff) && is.finite(cutoff)) {
+      graphics::abline(h = log10(1 + cutoff), lty = 2, lwd = 2)
+    }
+  }
+  graphics::par(mfrow = c(1, 2), oma = c(0, 0, 2, 0))
+  margin_box(first$top_margin, "log10(1 + top - second score)",
+             "First-pass top margin", thr)
+  margin_box(first$annotation_margin,
+             "log10(1 + top - observed-label score)",
+             "First-pass annotation margin", thr)
+  graphics::mtext(paste(status, "| dashed = exclusion cutoff"),
+                  outer = TRUE, cex = 0.9,
+                  col = if (gate$low_agreement) "firebrick" else "darkgreen")
+  graphics::par(oma = c(0, 0, 0, 0))
 
   graphics::par(mfrow = c(1, 2))
   finite_hist(
@@ -202,16 +217,26 @@ plot_check_annotation_gates <- function(result, file = NULL) {
                      lwd = 8, col = "steelblue")
   graphics::segments(2, 0, 2, misannotation$specificity,
                      lwd = 8, col = "steelblue")
+  graphics::mtext(
+    sprintf("%s; %d repeat(s)", sub("_", " ", misannotation$source),
+            misannotation$n_repeats_validated),
+    side = 3, cex = 0.7
+  )
 
+  recovery <- c(
+    Overall = performance$identity_recovery_accuracy,
+    `Swapped samples` = performance$recovery_accuracy_misannotated
+  )
   graphics::plot(
-    c(0, 1), c(0, 1), type = "n", xlim = c(0.5, 1.5), ylim = c(0, 1),
+    c(0, 1), c(0, 1), type = "n", xlim = c(0.5, 2.5), ylim = c(0, 1),
     xaxt = "n", xlab = "", ylab = "Accuracy",
     main = paste("Identity recovery", recovery_status)
   )
-  graphics::axis(1, at = 1, labels = "Overall")
+  graphics::axis(1, at = 1:2, labels = names(recovery))
   graphics::abline(h = 0.8, col = "firebrick", lty = 2)
-  graphics::segments(1, 0, 1, performance$identity_recovery_accuracy,
-                     lwd = 8, col = "steelblue")
+  for (i in which(is.finite(recovery))) {
+    graphics::segments(i, 0, i, recovery[[i]], lwd = 8, col = "steelblue")
+  }
 
   unknown_sensitivity <- if (is.null(unknown$metrics)) NA_real_ else
     unknown$metrics$sensitivity

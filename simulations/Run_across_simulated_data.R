@@ -8,26 +8,38 @@ custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
 #   Rscript simulations/Run_across_simulated_data.R
 #   Rscript simulations/Run_across_simulated_data.R cores=4 subset="rep == 1"
 #   Rscript simulations/Run_across_simulated_data.R scenarios=1:20 force=TRUE
+# Or as a Slurm job array with simulations/run_sims.sh. Task k of n handles
+# scenarios k, k+n, k+2n, ... (interleaved so slow scenarios spread evenly) and
+# writes one row file per scenario and config under <out>/rows, so tasks never
+# write to the same file. After all tasks finish, build the summary with
+#   Rscript simulations/Run_across_simulated_data.R combine=TRUE
+# A single process (n_tasks=1) combines its own results at the end.
 #
 # Arguments (key=value, all optional):
 #   input      simulated datasets        (default simulations/results/simulated_datasets_v2.rds)
 #   out        output directory          (default simulations/results)
-#   cores      parallel workers          (default 1)
+#   cores      parallel workers inside one process (default 1)
+#   task_id, n_tasks  which slice to run (defaults: SLURM_ARRAY_TASK_ID, 1 of 1)
+#   combine    TRUE to only combine the finished row files into the summary
 #   subset     data.table expression on the scenario parameters, e.g. "rep == 1"
 #   scenarios  R expression for scenario numbers, e.g. 1:20
 #   cv_folds, mismatch_repeats, target_specificity
 #              comma-separated values to compare; every combination is run, e.g.
 #              cv_folds=5,loo mismatch_repeats=1,3 target_specificity=0.9,0.95,0.99
-#              ("loo" = leave-one-out). Defaults: 5, 1, 0.95
-#   force      TRUE to recompute scenarios that already have a dirty file
+#              ("loo" = leave-one-out). Defaults: 5, 3, 0.95
+#   force      TRUE to recompute scenarios that already have a row file
+#   min_agreement  agreement gate passed to check_annotations() (default 0 =
+#              off; first_pass_agreement is recorded to apply cutoffs later)
 #
 # Outputs:
-#   <out>/summary_v2.rds, .csv   one row per scenario (parameters + metrics)
+#   <out>/summary_v2.rds, .csv   one row per scenario and config (parameters + metrics)
+#   <out>/rows/scenario_<n>__<config>.rds  one scored row; the resume point
 #   <out>/dirty/scenario_<n>__<config>.rds the full check_annotations() result plus the
 #                                truth for that scenario. These are large and
 #                                disposable: delete the folder at any time.
-# Finished scenarios are skipped on a rerun (use force=TRUE to redo them), so
-# an interrupted run can be resumed.
+# Finished scenarios and configs are skipped on a rerun (use force=TRUE to redo
+# them, or a new out= directory after changing the package), so an interrupted
+# run can be resumed.
 suppressMessages({library(data.table); library(SampleAnnotationLikelihood)})
 
 # ---- Settings -----------------------------------------------------------------
@@ -35,13 +47,18 @@ suppressMessages({library(data.table); library(SampleAnnotationLikelihood)})
 args <- commandArgs(trailingOnly = TRUE)
 opt <- list(input = "simulations/results/simulated_datasets_v2.rds",
             out = "simulations/results", cores = "1", subset = "", scenarios = "",
-            cv_folds = "5", mismatch_repeats = "1", target_specificity = "0.95",
-            force = "FALSE")
+            task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
+            combine = "FALSE",
+            cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
+            min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
   opt[[kv[1]]] <- paste(kv[-1], collapse = "=")
 }
-check_args <- list(detect_unknown = FALSE)   # fixed arguments for check_annotations()
+# min_agreement = 0 disables the agreement gate so every scenario is fully
+# processed; first_pass_agreement is recorded to apply any cutoff afterwards.
+check_args <- list(detect_unknown = FALSE,
+                   min_agreement = as.numeric(opt$min_agreement))   # fixed arguments for check_annotations()
 # Settings to compare: every combination is run on every scenario, on the same
 # seed, so differences between configs are paired. cv_folds: a number, or
 # "loo" for leave-one-sample-out (cv_folds = NULL in the package). A number
@@ -53,7 +70,10 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               sorted = FALSE)
 configs[, cfg := sprintf("cv%s_mr%d_ts%s", cv_folds, mismatch_repeats, target_specificity)]
 dirty_dir <- file.path(opt$out, "dirty")
-dir.create(dirty_dir, recursive = TRUE, showWarnings = FALSE)
+rows_dir <- file.path(opt$out, "rows")
+for (d in c(dirty_dir, rows_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+task_id <- as.integer(opt$task_id); n_tasks <- as.integer(opt$n_tasks)
+stopifnot(task_id >= 1L, task_id <= n_tasks)
 
 # ---- Scoring helpers ----------------------------------------------------------
 
@@ -63,6 +83,7 @@ auroc <- function(score, positive) {
   (sum(rank(score)[positive]) - n1 * (n1 + 1) / 2) / (n1 * n0)
 }
 ratio <- function(a, b) if (b > 0) a / b else NA_real_
+or_na <- function(x) if (is.null(x) || !length(x)) NA_real_ else x
 all_statuses <- c("insufficient_evidence", "potential_unknown_individual",
                   "suspicious_with_candidate_correction",
                   "suspicious_without_reliable_alternative", "no_confident_prediction",
@@ -83,6 +104,11 @@ score_scenario <- function(r, meta, seconds) {
   conf <- !is.na(p$predicted_id_clean)
   sens <- ratio(tp, tp + fn); spec <- ratio(tn, tn + fp)
   rep_m <- r$performance$misannotation_detection
+  perf <- r$performance
+  det <- rep_m
+  all_alt <- perf$all_alternatives_detection
+  corr_v <- perf$correction_validation
+  rec_true <- ratio(sum(p$predicted_id[bad] == truth[bad]), sum(bad))
   verdict <- r$feasibility$misannotation_detection
   st <- table(factor(p$annotation_status, levels = all_statuses))
   out <- data.table(
@@ -102,6 +128,30 @@ score_scenario <- function(r, meta, seconds) {
     verdict_correct = if (low) NA else (verdict == "appears_feasible") ==
       (isTRUE(sens >= 0.8) && isTRUE(spec >= 0.95)),
     recovery_verdict = r$feasibility$identity_recovery,
+    recovery_verdict_correct = if (low || is.na(rec_true)) NA else
+      (r$feasibility$identity_recovery == "appears_feasible") == (rec_true >= 0.8),
+    # detection benchmark behind the verdict: where sensitivity came from, its
+    # in-sample value and spread, and the every-wrong-label diagnostic
+    detection_source = or_na(det$source),
+    n_repeats_validated = or_na(det$n_repeats_validated),
+    sens_in_sample = or_na(det$sensitivity_in_sample),
+    sens_sd = or_na(det$sensitivity_sd),
+    sens_all_alt = or_na(all_alt$sensitivity),
+    spec_all_alt = or_na(all_alt$specificity),
+    sens_all_alt_gap = or_na(all_alt$sensitivity) - sens,
+    # recovery on the truly misannotated samples: reported (simulated swaps)
+    # versus true
+    recovery_true_misid = rec_true,
+    recovery_reported_misid = or_na(perf$recovery_accuracy_misannotated),
+    recovery_gap = or_na(perf$recovery_accuracy_misannotated) - rec_true,
+    # proposed corrections: reported (simulated swaps) versus true
+    n_corrections_reported = or_na(corr_v$n_proposed),
+    correction_precision_reported = or_na(corr_v$precision),
+    correction_recall_reported = or_na(corr_v$recall),
+    correction_precision_gap = or_na(corr_v$precision) -
+      ratio(sum(p$candidate_correction[corr] == truth[corr]), sum(corr)),
+    correction_recall_gap = or_na(corr_v$recall) -
+      ratio(sum(p$candidate_correction[corr & bad] == truth[corr & bad]), sum(bad)),
     n_held = length(held), n_held_misid = sum(held_bad),
     held_precision = ratio(sum(held_bad), length(held)),
     held_recall = ratio(sum(held_bad), sum(bad)),
@@ -148,70 +198,87 @@ run_config <- function(sim, id, cfg, meta, X, md) {
   res
 }
 
-# Runs the configs that are not finished yet for one scenario; returns rows.
-run_scenario <- function(sim, id) {
-  done <- file.exists(file.path(dirty_dir, sprintf("scenario_%s__%s.rds", id, configs$cfg)))
-  todo <- if (as.logical(opt$force)) configs$cfg else configs$cfg[!done]
+row_file <- function(id, cfg) file.path(rows_dir, sprintf("scenario_%s__%s.rds", id, cfg))
+
+# Runs the configs that are not finished yet for one scenario and saves one row
+# file per config, so array tasks never write to the same file.
+run_scenario <- function(sim, id, g) {
+  todo <- if (as.logical(opt$force)) configs$cfg else
+    configs$cfg[!file.exists(row_file(id, configs$cfg))]
+  if (!length(todo)) return(invisible())
   meta <- as.data.frame(sim$meta)
   meta$label_true <- as.character(meta$label_true)
   X <- t(sim$X)   # the simulator returns samples x features
   md <- data.frame(sample = meta$sample, label = as.character(meta$label_observed))
-  rbindlist(lapply(todo, function(k) {
+  for (k in todo) {
     cfg <- configs[cfg == k]
     res <- tryCatch(run_config(sim, id, cfg, meta, X, md),
                     error = function(e) data.table(status = "error", error = conditionMessage(e)))
+    saveRDS(cbind(g, cfg, res), row_file(id, k))
     cat(sprintf("scenario %d [%s]: %s\n", id, k, res$status))
-    cbind(cfg, res)
-  }), fill = TRUE)
+  }
+  invisible()
+}
+
+# Combines every finished row file into the summary table.
+combine_rows <- function() {
+  files <- list.files(rows_dir, pattern = "^scenario_.*\\.rds$", full.names = TRUE)
+  if (!length(files)) {
+    cat("No finished rows in", rows_dir, "\n")
+    return(invisible())
+  }
+  new <- rbindlist(lapply(files, readRDS), fill = TRUE)
+  setorder(new, scenario, cfg)
+  summary_file <- file.path(opt$out, "summary_v2.rds")
+  saveRDS(new, summary_file)
+  fwrite(new, sub("\\.rds$", ".csv", summary_file))
+  cat(sprintf("\nCombined %d rows into %s\n", nrow(new), summary_file))
+
+  cat("\nStatus counts:\n"); print(new[, .N, by = status])
+  ok <- new[status == "ok"]
+  if (nrow(ok)) {
+    cat("\nBy config and mislabel rate (ok runs):\n")
+    print(ok[, .(runs = .N, sens = mean(sens_true, na.rm = TRUE), fp = mean(fp),
+                 spec = mean(spec_true), auroc = mean(auroc_annotation_margin, na.rm = TRUE),
+                 sens_gap = mean(sens_gap, na.rm = TRUE),
+                 verdict_ok = mean(verdict_correct, na.rm = TRUE)),
+             by = .(cfg, misid_rate)][order(cfg, misid_rate)])
+  }
+  invisible(new)
 }
 
 # ---- Run ----------------------------------------------------------------------
 
-sims <- readRDS(opt$input)
-params <- rbindlist(lapply(sims, `[[`, "params"), fill = TRUE)
-params[, scenario := as.integer(names(sims))]
-keep <- rep(TRUE, nrow(params))
-if (nzchar(opt$subset)) keep <- keep & params[, eval(parse(text = opt$subset))]
-if (nzchar(opt$scenarios)) keep <- keep & params$scenario %in% eval(parse(text = opt$scenarios))
-todo <- which(keep)
-if (!as.logical(opt$force)) {
-  # drop scenarios whose configs are all finished
-  all_done <- vapply(params$scenario[todo], function(id) {
-    all(file.exists(file.path(dirty_dir, sprintf("scenario_%s__%s.rds", id, configs$cfg))))
-  }, logical(1))
-  todo <- todo[!all_done]
-}
-cat(sprintf("%d scenarios x %d configs selected (%d scenarios in the grid, %s cores)\n",
-            length(todo), nrow(configs), nrow(params), opt$cores))
+if (!as.logical(opt$combine)) {
+  sims <- readRDS(opt$input)
+  params <- rbindlist(lapply(sims, `[[`, "params"), fill = TRUE)
+  params[, scenario := as.integer(names(sims))]
+  keep <- rep(TRUE, nrow(params))
+  if (nzchar(opt$subset)) keep <- keep & params[, eval(parse(text = opt$subset))]
+  if (nzchar(opt$scenarios)) keep <- keep & params$scenario %in% eval(parse(text = opt$scenarios))
+  # Slice by position among the selected scenarios, so every task gets a share.
+  mine <- which(keep)
+  mine <- mine[(seq_along(mine) - 1L) %% n_tasks == task_id - 1L]
+  if (!as.logical(opt$force)) {
+    # drop scenarios whose configs are all finished
+    all_done <- vapply(params$scenario[mine], function(id) {
+      all(file.exists(row_file(id, configs$cfg)))
+    }, logical(1))
+    mine <- mine[!all_done]
+  }
+  cat(sprintf("task %d/%d: %d scenarios x %d configs (%d scenarios in the grid, %s cores)\n",
+              task_id, n_tasks, length(mine), nrow(configs), nrow(params), opt$cores))
 
-run_one <- function(i) {
-  g <- params[i]
-  cbind(g, run_scenario(sims[[i]], g$scenario))
+  run_one <- function(j) run_scenario(sims[[j]], params$scenario[j], params[j])
+  # Keep only this task's scenarios in memory; the full file is large.
+  sims <- sims[mine]; params <- params[mine]; invisible(gc())
+  res <- parallel::mclapply(seq_along(mine), run_one, mc.cores = as.integer(opt$cores),
+                            mc.preschedule = FALSE)
+  failed <- vapply(res, inherits, logical(1), "try-error")
+  if (any(failed)) cat(sum(failed), "worker(s) crashed; rerun to retry them\n")
+  cat("task", task_id, "done\n")
 }
-rows <- parallel::mclapply(todo, run_one, mc.cores = as.integer(opt$cores),
-                           mc.preschedule = FALSE)
-failed <- vapply(rows, inherits, logical(1), "try-error")
-if (any(failed)) cat(sum(failed), "worker(s) crashed; rerun to retry them\n")
-new <- rbindlist(rows[!failed], fill = TRUE)
 
-# Merge with earlier runs so a resumed or partial run keeps its summary.
-summary_file <- file.path(opt$out, "summary_v2.rds")
-if (file.exists(summary_file)) {
-  old <- readRDS(summary_file)
-  new <- rbindlist(list(old[!paste(scenario, cfg) %in% paste(new$scenario, new$cfg)], new), fill = TRUE)
-}
-setorder(new, scenario, cfg)
-saveRDS(new, summary_file)
-fwrite(new, sub("\\.rds$", ".csv", summary_file))
-
-# ---- Quick look ---------------------------------------------------------------
-
-cat("\nStatus counts:\n"); print(new[, .N, by = status])
-ok <- new[status == "ok"]
-if (nrow(ok)) {
-  cat("\nBy config and mislabel rate (ok runs):\n")
-  print(ok[, .(runs = .N, sens = mean(sens_true, na.rm = TRUE), fp = mean(fp),
-               spec = mean(spec_true), auroc = mean(auroc_annotation_margin, na.rm = TRUE),
-               sens_gap = mean(sens_gap, na.rm = TRUE), verdict_ok = mean(verdict_correct, na.rm = TRUE)),
-           by = .(cfg, misid_rate)][order(cfg, misid_rate)])
-}
+# A single process combines its own results; in a job array, run
+# `combine=TRUE` once after all tasks finish.
+if (as.logical(opt$combine) || n_tasks == 1L) combine_rows()

@@ -1,6 +1,6 @@
 # Run one saved GTEx simulation scenario with intermediate gate diagnostics.
 #
-# From the repository root, after installing the current package:
+# From the repository root:
 #   Rscript scripts/run_gtex_scenario_diagnostics.R \
 #     scenario=12 scenarios_file=simulations/results/gtex_scenarios.rds \
 #     expr=/path/to/GTEx_v11_VST.rds
@@ -41,7 +41,38 @@ if (is.null(opt$scenario) || !nzchar(opt$scenario)) {
   stop("Specify scenario=<scenario number>.")
 }
 
-suppressPackageStartupMessages(library(SampleAnnotationLikelihood))
+custom_lib <- Sys.getenv(
+  "MISID_QC_R_LIB",
+  "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
+)
+dir.create(custom_lib, recursive = TRUE, showWarnings = FALSE)
+.libPaths(c(custom_lib, .libPaths()))
+
+if (!requireNamespace("devtools", quietly = TRUE)) {
+  stop("Install devtools in this R environment before running this wrapper.")
+}
+devtools::install_local(
+  path = normalizePath(".", mustWork = TRUE),
+  lib = custom_lib,
+  force = TRUE,
+  upgrade = "never",
+  quiet = TRUE
+)
+suppressPackageStartupMessages(
+  library(SampleAnnotationLikelihood, lib.loc = custom_lib)
+)
+check_annotations_fun <- getExportedValue(
+  "SampleAnnotationLikelihood", "check_annotations"
+)
+if (!"diagnostics" %in% names(formals(check_annotations_fun))) {
+  stop(
+    "The loaded SampleAnnotationLikelihood package does not support ",
+    "`diagnostics`. It was loaded from ",
+    find.package("SampleAnnotationLikelihood"),
+    ". Install the current repository into a library on .libPaths(), then ",
+    "restart R and rerun this script."
+  )
+}
 
 if (!file.exists(opt$scenarios_file)) {
   stop("Scenario file does not exist: ", opt$scenarios_file)
@@ -106,7 +137,7 @@ if (length(seed) != 1L || is.na(seed)) {
 }
 set.seed(seed)
 
-result <- check_annotations(
+result <- check_annotations_fun(
   expr = expr,
   metadata = data.frame(
     sample = meta$sample,
@@ -132,10 +163,14 @@ prefix <- file.path(opt$out, paste0("scenario_", scenario_id))
 pdf_file <- paste0(prefix, "_gates.pdf")
 rds_file <- paste0(prefix, "_diagnostics.rds")
 tables <- plot_check_annotation_gates(result, file = pdf_file)
+source(file.path("scripts", "plot_first_pass_truth.R"))
+truth_pdf_file <- paste0(prefix, "_first_pass_truth.pdf")
+first_pass_truth <- plot_first_pass_truth(result, meta, file = truth_pdf_file)
 saveRDS(
   list(
     result = result,
     diagnostics = tables,
+    first_pass_truth = first_pass_truth,
     truth = meta,
     params = scenario$params,
     settings = list(
@@ -149,4 +184,5 @@ saveRDS(
 )
 cat("Scenario", scenario_id, "diagnostics saved:\n",
     "  PDF:", pdf_file, "\n",
+    "  Truth PDF:", truth_pdf_file, "\n",
     "  RDS:", rds_file, "\n")

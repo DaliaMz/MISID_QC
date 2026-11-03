@@ -52,10 +52,11 @@
 #'   pairwise in a simulation that gives known-truth agreement for the
 #'   risk-coverage curve. `NULL` or 0 disables the simulation.
 #' @param mismatch_repeats Number of independent label-swap simulations whose
-#'   results are pooled to tune the cutoffs and estimate sensitivity. More
-#'   repeats give a less extreme annotation cutoff and better sensitivity at
-#'   the cost of roughly proportional simulation time. Use 1 for a single
-#'   draw.
+#'   results are pooled to tune the annotation cutoff. With at least two
+#'   repeats, detection sensitivity is cross-fitted: each repeat is scored with
+#'   a cutoff tuned on the other repeats. More repeats give a less extreme
+#'   cutoff and a steadier sensitivity estimate at the cost of roughly
+#'   proportional simulation time. With 1, sensitivity is in-sample.
 #' @param diagnostics Whether to include intermediate gate data in the result.
 #'   This is intended for understanding and plotting the validation steps; it
 #'   can add substantially to the result size.
@@ -90,7 +91,16 @@
 #'   `performance`, `calibration`, `risk_coverage` (see
 #'   [plot_risk_coverage()]), `mismatch_simulation`, `held_out` (count, fraction and IDs of samples held out as
 #'   confidently misassigned, from the first pass), `feasibility`, and
-#'   `thresholds` components.
+#'   `thresholds` components. `predictions$annotation_status` is descriptive
+#'   (flag, abstention, agreement) and does not depend on `feasibility`;
+#'   `"insufficient_evidence"` is only used when the minimum-agreement gate
+#'   fails. `performance$misannotation_detection` is validated on simulated
+#'   swaps (see its `source` column), `performance$all_alternatives_detection`
+#'   keeps the every-wrong-label diagnostic, and
+#'   `performance$recovery_accuracy_misannotated` and
+#'   `performance$correction_validation` report recovery on simulated
+#'   misannotated samples and the precision and recall of proposed corrections.
+#'   Candidate corrections require identity recovery to appear feasible.
 #' @export
 check_annotations <- function(expr, metadata, sample_col, id_col,
                               shrinkage = 0.1, target_specificity = 0.95,
@@ -438,14 +448,78 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # replacement, which needs a confident prediction.
   flagged <- annotation_margin > margin_threshold
 
-  misannotation_metrics <- .binary_metrics(
+  # Every wrong label as a false label: a broad robustness diagnostic that
+  # also includes easily confused identities real swaps rarely involve.
+  all_alternatives_metrics <- .binary_metrics(
     c(rep(FALSE, sum(reference)), rep(TRUE, length(false_margin))),
     c(flagged[reference], false_margin > margin_threshold),
     c(annotation_margin[reference], false_margin)
   )
-  # Each sample is scored against every wrong label equally often, so recovery
-  # equals overall agreement.
+  # Detection is validated on the simulated swaps the cutoff is tuned on, with
+  # sensitivity cross-fitted by repeat so no swap is scored by a cutoff that
+  # saw it. Without enough repeats it is in-sample; without a simulation it
+  # falls back to every wrong label.
+  swap_simulation <- !is.null(simulation) && any(simulation$actually_misannotated)
+  if (swap_simulation) {
+    swap_margins <- simulation$annotation_margin[simulation$actually_misannotated]
+    misannotation_metrics <- .binary_metrics(
+      c(rep(FALSE, sum(reference)), rep(TRUE, length(swap_margins))),
+      c(flagged[reference], swap_margins > margin_threshold),
+      c(annotation_margin[reference], swap_margins)
+    )
+    crossfit <- .crossfit_swap_detection(
+      annotation_margin[reference], simulation, target_specificity
+    )
+    detection_source <- if (is.null(crossfit)) {
+      "simulated_swaps_in_sample"
+    } else {
+      "simulated_swaps_cross_fitted"
+    }
+  } else {
+    misannotation_metrics <- all_alternatives_metrics
+    crossfit <- NULL
+    detection_source <- "all_wrong_identities"
+  }
+  misannotation_metrics$sensitivity_in_sample <- misannotation_metrics$sensitivity
+  if (!is.null(crossfit)) {
+    misannotation_metrics$sensitivity <- crossfit$sensitivity
+    misannotation_metrics$false_negative_rate <- 1 - crossfit$sensitivity
+  }
+  misannotation_metrics$sensitivity_sd <- if (is.null(crossfit)) {
+    NA_real_
+  } else {
+    crossfit$sensitivity_sd
+  }
+  misannotation_metrics$n_repeats_validated <- if (is.null(crossfit)) {
+    0L
+  } else {
+    crossfit$n_repeats
+  }
+  misannotation_metrics$source <- detection_source
+  # Overall agreement: each sample is scored against every wrong label equally
+  # often, so this equals the all-alternatives recovery.
   identity_recovery <- mean(correct_identity)
+  # Recovery on the samples that actually need a correction: simulated swaps
+  # whose top prediction equals the original label, and the quality of the
+  # corrections that would be proposed.
+  recovery_misannotated <- if (swap_simulation) {
+    mean(simulation$agreement_real[simulation$actually_misannotated])
+  } else {
+    NA_real_
+  }
+  correction_validation <- if (!is.null(simulation)) {
+    proposed <- simulation$annotation_margin > margin_threshold &
+      simulation$top_margin >= max(abstain_threshold, unknown_threshold) &
+      !simulation$agreement_simulated
+    swapped <- simulation$actually_misannotated
+    list(
+      n_proposed = sum(proposed),
+      precision = .safe_divide(sum(simulation$agreement_real[proposed]),
+                               sum(proposed)),
+      recall = .safe_divide(sum(simulation$agreement_real[proposed & swapped]),
+                            sum(swapped))
+    )
+  }
   swap_samples <- integer()
   swap_labels <- character()
   for (i in seq_len(length(class_counts) - 1L)) {
@@ -528,7 +602,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     correct_identity_recovery_accuracy = mean(correct_identity),
     top_three_identity_recovery_accuracy = mean(top_three),
     misannotation_detection = misannotation_metrics,
+    all_alternatives_detection = all_alternatives_metrics,
     identity_recovery_accuracy = identity_recovery,
+    recovery_accuracy_misannotated = recovery_misannotated,
+    correction_validation = correction_validation,
     pairwise_swap_detection = pairwise_swap_metrics,
     pairwise_swap_identity_recovery_accuracy = mean(
       predicted_id[swap_samples] == y[swap_samples]
@@ -548,9 +625,14 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     } else {
       "unreliable"
     }
+    recovery_estimate <- if (is.finite(recovery_misannotated)) {
+      recovery_misannotated
+    } else {
+      identity_recovery
+    }
     recovery_status <- if (!enough_known) {
       "insufficient_evidence"
-    } else if (identity_recovery >= 0.8) {
+    } else if (recovery_estimate >= 0.8) {
       "appears_feasible"
     } else {
       "unreliable"
@@ -573,13 +655,18 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         "Internal estimates are exploratory: threshold selection and",
         "performance use the same out-of-fold predictions. Thresholds and",
         "specificity exclude confidently misassigned samples. Margin-based",
-        "flagging has no probability interpretation. Margin and unknown",
-        "thresholds are tuned on the same simulated positives used to estimate",
-        "sensitivity, which makes sensitivity optimistic."
+        "flagging has no probability interpretation. Detection sensitivity",
+        "is cross-fitted across simulated-swap repeats when at least two are",
+        "available (see performance$misannotation_detection$source); the",
+        "unknown cutoff is tuned on the same simulated strangers used to",
+        "estimate unknown sensitivity, which makes that sensitivity",
+        "optimistic. Recovery and correction estimates use the final cutoffs",
+        "on the same simulated swaps."
       )
     )
-    reliable_correction <- detection_status == "appears_feasible" &&
-      recovery_status == "appears_feasible"
+    # Corrections need validated identity recovery; the suspicious flag itself
+    # does not depend on feasibility.
+    reliable_correction <- recovery_status == "appears_feasible"
   } else {
     reliable_correction <- FALSE
   }
@@ -589,16 +676,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       predicted_id,
       NA_character_
   )
-  reliable_assessment <- !is.null(feasibility) &&
-    feasibility$misannotation_detection == "appears_feasible"
-  reliable_unknown <- !is.null(feasibility) &&
-    feasibility$unknown_individual_detection == "appears_feasible"
+  # Descriptive only: feasibility is reported in `feasibility`, not folded in.
   predictions$annotation_status <- ifelse(
-    !flagged & (!reliable_assessment |
-                  (predictions$potential_unknown_individual & !reliable_unknown)),
-    "insufficient_evidence",
-    ifelse(predictions$potential_unknown_individual & reliable_unknown &
-             !flagged, "potential_unknown_individual",
+    !flagged & predictions$potential_unknown_individual,
+    "potential_unknown_individual",
     ifelse(!is.na(predictions$candidate_correction),
            "suspicious_with_candidate_correction",
     ifelse(flagged, "suspicious_without_reliable_alternative",
@@ -606,7 +687,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
            "no_confident_prediction",
     ifelse(confident_prediction & predicted_id != y,
            "weak_disagreement",
-           "no_evidence_of_incorrect_annotation")))))
+           "no_evidence_of_incorrect_annotation"))))
   )
   if (low_agreement) {
     # Thresholds were tuned on predictions that mostly disagree with the

@@ -66,14 +66,19 @@ to_observed <- function(z, type) {
   )
 }
 
-# Relabel a fraction of samples to a different random label.
-introduce_misid <- function(label, rate) {
+# Relabel a fraction of samples to a different random label. The package needs
+# at least 2 samples per observed label, so redraw (rarely needed at low rates)
+# until every label keeps that many.
+introduce_misid <- function(label, rate, min_count = 2L, max_tries = 200L) {
   n <- length(label); K <- max(label)
-  is_misid <- logical(n)
-  is_misid[sample.int(n, round(n * rate))] <- TRUE
-  new <- label
-  # Offset in 1..(K-1) guarantees a different label
-  new[is_misid] <- (label[is_misid] - 1L + sample.int(K - 1L, sum(is_misid), replace = TRUE)) %% K + 1L
+  for (try in seq_len(max_tries)) {
+    is_misid <- logical(n)
+    is_misid[sample.int(n, round(n * rate))] <- TRUE
+    new <- label
+    # Offset in 1..(K-1) guarantees a different label
+    new[is_misid] <- (label[is_misid] - 1L + sample.int(K - 1L, sum(is_misid), replace = TRUE)) %% K + 1L
+    if (all(tabulate(new, K) >= min_count)) break
+  }
   list(label = new, is_misid = is_misid)
 }
 
@@ -96,36 +101,34 @@ simulate_dataset <- function(type, var_label, var_discrete, var_cont, n_per_labe
 
 # ---- Scenario grid ----------------------------------------------------------
 
-# Easier than the first version: label variance below ~0.2 mostly fails the
-# package's 70% agreement gate (nothing to evaluate), and n_per_label = 5 breaks
-# cv_folds = 5 once misidentified samples shrink a label below 5 samples.
-# Gaussian gets the full factorial; the other data types a reduced one.
+# One crossed design, so every effect is estimated on the same footing:
+#   - gaussian: the full factorial of the factors below.
+#   - rnaseq, olink: a small check that the Gaussian findings carry over, at
+#     one label-variance level, crossed with the same nuisance levels.
+# The questions this design answers (see simulations/README.md): how well
+# detection and recovery work, and how far the package's internal estimates sit
+# from the truth, mainly as a function of first-pass agreement. That is driven by
+# label signal (var_label), mislabel rate and replication; the discrete and
+# continuous nuisance variance are contrasted as one factor ("nuisance"), none
+# versus both. rate 0 measures false positives on clean data. n_per_label >= 6
+# keeps cv_folds = 5 usable. The agreement gate is off in the runner.
 grid <- rbind(
   CJ(type = "gaussian",
-     var_label    = c(0.2, 0.35, 0.5),
-     var_discrete = c(0, 0.2, 0.4),
-     var_cont     = c(0, 0.2),
+     var_label    = c(0.05, 0.2, 0.5),
+     nuisance     = c("none", "both"),
      n_per_label  = c(6, 10, 20),
-     misid_rate   = c(0, 0.05, 0.1, 0.2),  # 0 measures false positives on clean data
+     misid_rate   = c(0, 0.02, 0.05, 0.1, 0.2, 0.4),
      rep          = 1:3),
   CJ(type = c("rnaseq", "olink"),
-     var_label    = c(0.3, 0.5),
-     var_discrete = c(0, 0.3),
-     var_cont     = c(0, 0.2),
-     n_per_label  = c(10, 20, 30),
-     misid_rate   = c(0, 0.1),
-     rep          = 1:3),
-  # Low label variance: many of these fail the 70% agreement gate, which is
-  # the point (checks the package reports insufficient_evidence, not noise).
-  # Appended last so earlier scenario numbers and seeds are unchanged.
-  CJ(type = "gaussian",
-     var_label    = c(0.05, 0.1),
-     var_discrete = c(0, 0.2),
-     var_cont     = 0,
-     n_per_label  = c(10, 20),
-     misid_rate   = c(0, 0.1),
+     var_label    = 0.2,
+     nuisance     = c("none", "both"),
+     n_per_label  = 10,
+     misid_rate   = c(0, 0.1, 0.4),
      rep          = 1:3)
-)[var_label + var_discrete + var_cont <= 1]
+)
+grid[, `:=`(var_discrete = fifelse(nuisance == "both", 0.3, 0),
+            var_cont = fifelse(nuisance == "both", 0.2, 0))]
+stopifnot(all(grid$var_label + grid$var_discrete + grid$var_cont <= 1))
 grid[, scenario := .I]
 grid[, seed := 1000L + scenario]
 

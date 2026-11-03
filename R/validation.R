@@ -194,6 +194,35 @@
   candidates[best][ceiling(length(best) / 2)]
 }
 
+# Detection sensitivity on simulated swaps the cutoff was not tuned on. Each
+# repeat is scored with a cutoff chosen from the other repeats' swaps and the
+# real reference margins (`negatives`). Returns NULL with fewer than two
+# repeats that contain swaps.
+.crossfit_swap_detection <- function(negatives, simulation,
+                                     target_specificity) {
+  swaps <- simulation[simulation$actually_misannotated &
+                        is.finite(simulation$annotation_margin), ,
+                      drop = FALSE]
+  by_repeat <- split(swaps$annotation_margin, swaps$repeat_id)
+  by_repeat <- by_repeat[lengths(by_repeat) > 0L]
+  if (length(by_repeat) < 2L) {
+    return(NULL)
+  }
+  per_repeat <- vapply(names(by_repeat), function(r) {
+    threshold <- .select_threshold(
+      negatives, unlist(by_repeat[names(by_repeat) != r], use.names = FALSE),
+      target_specificity, "upper"
+    )
+    mean(by_repeat[[r]] > threshold)
+  }, numeric(1))
+  sizes <- lengths(by_repeat)
+  list(
+    sensitivity = sum(per_repeat * sizes) / sum(sizes),
+    sensitivity_sd = stats::sd(per_repeat),
+    n_repeats = length(per_repeat)
+  )
+}
+
 # Top margins of simulated strangers. For each held-out individual only up to
 # `n_strays` of their samples (never all of them) stay in the data, relabelled
 # as random other enrolled individuals, as a stranger's samples would be in a

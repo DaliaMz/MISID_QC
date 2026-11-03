@@ -26,11 +26,17 @@ custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
 #                     run, e.g.  cv_folds=5,loo mismatch_repeats=1,3
 #                     margin_coverage=0.01,0.025,0.05
 #                     target_specificity=0.9,0.95,0.99   ("loo" = leave-one-out)
-#                     defaults: 5, 1, 0.025, 0.95
+#                     defaults: 5, 3, 0.025, 0.95 (mismatch_repeats >= 2 is
+#                     needed for cross-fitted detection sensitivity)
 #                     margin_coverage is the quantile of correct samples' top
 #                     margins above which a disagreeing sample is held out;
 #                     lower values hold out more samples.
 #   force             TRUE to recompute scenarios that are already done
+#                     (needed after a package or settings change: finished
+#                     configs are skipped even if they used other settings)
+#   min_agreement     first-pass agreement gate passed to check_annotations()
+#                     (default 0 = off; first_pass_agreement is recorded so any
+#                     cutoff can be applied afterwards)
 #
 # Outputs (one file per scenario, so tasks never write to the same file):
 #   <out>/rows_gtex/scenario_<n>__<config>.rds   summary row (parameters + metrics)
@@ -48,13 +54,16 @@ opt <- list(scenarios_file = "simulations/results/gtex_scenarios.rds",
             expr = "/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/GTEx_v11_VST.rds",
             out = "simulations/results", n_features = "2000",
             task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
-            subset = "", scenarios = "", cv_folds = "5", mismatch_repeats = "1", target_specificity = "0.95",
-            margin_coverage = "0.025", force = "FALSE")
+            subset = "", scenarios = "", cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
+            margin_coverage = "0.025", min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
   opt[[kv[1]]] <- paste(kv[-1], collapse = "=")
 }
-check_args <- list(detect_unknown = FALSE)   # fixed arguments for check_annotations()
+# min_agreement = 0 disables the agreement gate so every scenario is fully
+# processed; first_pass_agreement is recorded to apply any cutoff afterwards.
+check_args <- list(detect_unknown = FALSE,
+                   min_agreement = as.numeric(opt$min_agreement))   # fixed arguments for check_annotations()
 # Settings to compare: every combination is run on every scenario, on the same
 # seed, so differences between configs are paired. cv_folds: a number, or
 # "loo" for leave-one-sample-out (cv_folds = NULL in the package). A number
@@ -81,6 +90,7 @@ auroc <- function(score, positive) {
   (sum(rank(score)[positive]) - n1 * (n1 + 1) / 2) / (n1 * n0)
 }
 ratio <- function(a, b) if (b > 0) a / b else NA_real_
+or_na <- function(x) if (is.null(x) || !length(x)) NA_real_ else x
 all_statuses <- c("insufficient_evidence", "potential_unknown_individual",
                   "suspicious_with_candidate_correction",
                   "suspicious_without_reliable_alternative", "no_confident_prediction",
@@ -101,6 +111,11 @@ score_scenario <- function(r, meta, seconds) {
   conf <- !is.na(p$predicted_id_clean)
   sens <- ratio(tp, tp + fn); spec <- ratio(tn, tn + fp)
   rep_m <- r$performance$misannotation_detection
+  perf <- r$performance
+  det <- rep_m
+  all_alt <- perf$all_alternatives_detection
+  corr_v <- perf$correction_validation
+  rec_true <- ratio(sum(p$predicted_id[bad] == truth[bad]), sum(bad))
   verdict <- r$feasibility$misannotation_detection
   st <- table(factor(p$annotation_status, levels = all_statuses))
   out <- data.table(
@@ -118,6 +133,30 @@ score_scenario <- function(r, meta, seconds) {
     verdict_correct = if (low) NA else (verdict == "appears_feasible") ==
       (isTRUE(sens >= 0.8) && isTRUE(spec >= 0.95)),
     recovery_verdict = r$feasibility$identity_recovery,
+    recovery_verdict_correct = if (low || is.na(rec_true)) NA else
+      (r$feasibility$identity_recovery == "appears_feasible") == (rec_true >= 0.8),
+    # detection benchmark behind the verdict: where sensitivity came from, its
+    # in-sample value and spread, and the every-wrong-label diagnostic
+    detection_source = or_na(det$source),
+    n_repeats_validated = or_na(det$n_repeats_validated),
+    sens_in_sample = or_na(det$sensitivity_in_sample),
+    sens_sd = or_na(det$sensitivity_sd),
+    sens_all_alt = or_na(all_alt$sensitivity),
+    spec_all_alt = or_na(all_alt$specificity),
+    sens_all_alt_gap = or_na(all_alt$sensitivity) - sens,
+    # recovery on the truly misannotated samples: reported (simulated swaps)
+    # versus true
+    recovery_true_misid = rec_true,
+    recovery_reported_misid = or_na(perf$recovery_accuracy_misannotated),
+    recovery_gap = or_na(perf$recovery_accuracy_misannotated) - rec_true,
+    # proposed corrections: reported (simulated swaps) versus true
+    n_corrections_reported = or_na(corr_v$n_proposed),
+    correction_precision_reported = or_na(corr_v$precision),
+    correction_recall_reported = or_na(corr_v$recall),
+    correction_precision_gap = or_na(corr_v$precision) -
+      ratio(sum(p$candidate_correction[corr] == truth[corr]), sum(corr)),
+    correction_recall_gap = or_na(corr_v$recall) -
+      ratio(sum(p$candidate_correction[corr & bad] == truth[corr & bad]), sum(bad)),
     n_held = length(held), n_held_misid = sum(held_bad),
     held_precision = ratio(sum(held_bad), length(held)),
     held_recall = ratio(sum(held_bad), sum(bad)),
