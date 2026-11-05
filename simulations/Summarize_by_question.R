@@ -87,7 +87,15 @@ gap_panel <- function(d, y, main) {
   graphics::abline(v = 0.7, col = "grey70", lty = 3)
   if (nrow(d)) {
     d[, bin := cut(first_pass_agreement, agreement_breaks, labels = agreement_labels)]
-    m <- d[, .(x = mean(first_pass_agreement), v = mean(get(y))), by = bin][order(x)]
+    # Binned mean with a 95% t interval (needs at least two scenarios per bin).
+    m <- d[, .(x = mean(first_pass_agreement), v = mean(get(y)), n = .N,
+               se = stats::sd(get(y)) / sqrt(.N)), by = bin][order(x)]
+    m[, half := ifelse(n > 1L, stats::qt(0.975, pmax(n - 1L, 1L)) * se, NA_real_)]
+    ci <- m[is.finite(half)]
+    if (nrow(ci)) {
+      graphics::arrows(ci$x, ci$v - ci$half, ci$x, ci$v + ci$half, angle = 90,
+                       code = 3, length = 0.04, col = "firebrick", lwd = 1.5)
+    }
     graphics::lines(m$x, m$v, col = "firebrick", lwd = 2, type = "b", pch = 15)
   }
 }
@@ -120,26 +128,41 @@ summarise_source <- function(path) {
   graphics::mtext(paste(label, "- Q1: how well does it work?"), outer = TRUE, font = 2)
 
   # Q2
-  graphics::par(mfrow = c(2, 2))
+  graphics::par(mfrow = c(1, 2))
   gap_panel(dm, "sens_gap", "Q2: sensitivity, reported - true")
   gap_panel(d, "spec_gap", "Q2: specificity, reported - true")
-  gap_panel(dm, "recovery_gap", "Q2: recovery on swapped samples, reported - true")
-  gap_panel(dm, "correction_precision_gap", "Q2: correction precision, reported - true")
-  graphics::mtext(paste(label, "- Q2: how far are its estimates from the truth? (red = binned mean)"),
+  graphics::mtext(paste(label, "- Q2: how far are its estimates from the truth? (red = binned mean, 95% CI)"),
                   outer = TRUE, font = 2)
 
-  # Q3
+  # Q3: per agreement bin, how often the verdict matches the truth, split by
+  # whether the reported verdict was "appears_feasible" or not.
   d[, bin := cut(first_pass_agreement, agreement_breaks, labels = agreement_labels)]
   dm[, bin := cut(first_pass_agreement, agreement_breaks, labels = agreement_labels)]
   graphics::par(mfrow = c(1, 2))
-  for (v in c("verdict_correct", "recovery_verdict_correct")) {
-    if (!v %in% names(d)) next
+  q3 <- list(c("verdict_correct", "verdict", "Q3: detection verdict"),
+             c("recovery_verdict_correct", "recovery_verdict", "Q3: recovery verdict"))
+  for (spec in q3) {
+    v <- spec[1]; reported <- spec[2]
+    if (!all(c(v, reported) %in% names(d))) next
     dv <- if (v == "recovery_verdict_correct") dm else d
-    m <- dv[!is.na(get(v)), .(rate = mean(get(v)), n = .N), by = bin][order(bin)]
-    mids <- graphics::barplot(m$rate, names.arg = as.character(m$bin), ylim = c(0, 1),
-                              xlab = "First-pass agreement", ylab = "Verdict matches the truth",
-                              main = paste("Q3:", sub("_", " ", v)), col = "steelblue")
-    graphics::text(mids, m$rate, paste0("n=", m$n), pos = 3, cex = 0.7)
+    dv <- dv[!is.na(get(v)) & !is.na(bin)]
+    dv[, said_feasible := get(reported) == "appears_feasible"]
+    rate <- n <- matrix(NA_real_, 2L, length(agreement_labels),
+                        dimnames = list(c("feasible", "not feasible"), agreement_labels))
+    for (b in agreement_labels) for (f in c(TRUE, FALSE)) {
+      s <- dv[bin == b & said_feasible == f]
+      k <- if (f) "feasible" else "not feasible"
+      n[k, b] <- nrow(s)
+      if (nrow(s)) rate[k, b] <- mean(s[[v]])
+    }
+    mids <- graphics::barplot(ifelse(is.na(rate), 0, rate), beside = TRUE, ylim = c(0, 1.1),
+                              col = c("seagreen3", "grey60"), names.arg = agreement_labels,
+                              cex.names = 0.8, xlab = "First-pass agreement (binned)",
+                              ylab = "Fraction of scenarios where the verdict is right",
+                              main = spec[3])
+    graphics::text(mids, ifelse(is.na(rate), 0, rate), paste0("n=", n), pos = 3, cex = 0.6)
+    graphics::legend("bottomleft", fill = c("seagreen3", "grey60"), bty = "n", cex = 0.7,
+                     title = "Reported verdict", legend = c("appears_feasible", "not feasible"))
   }
   graphics::mtext(paste(label, "- Q3: where does the verdict break down?"), outer = TRUE, font = 2)
 
