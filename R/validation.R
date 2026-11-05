@@ -20,6 +20,21 @@
   )
 }
 
+# Hold-out cutoff: low quantile of the margins between each correctly predicted
+# sample's top score and its score for every other identity. This matches the
+# annotation margin of a disagreeing sample, which is also top minus the score
+# of one specific wrong identity.
+.holdout_threshold <- function(scores, correct, coverage) {
+  if (!any(correct)) {
+    return(Inf)
+  }
+  scores <- scores[correct, , drop = FALSE]
+  top_cell <- cbind(seq_len(nrow(scores)), max.col(scores, ties.method = "first"))
+  margins <- scores[top_cell] - scores
+  margins[top_cell] <- NA_real_
+  unname(stats::quantile(margins, probs = coverage, type = 1, na.rm = TRUE))
+}
+
 # Exchange labels between random pairs of samples from different individuals,
 # which preserves per-individual sample counts.
 .swap_labels <- function(y, n_swaps) {
@@ -51,12 +66,8 @@
   held_out <- rep(FALSE, length(y))
   scores <- .refit_oof_scores(x, y_sim, held_out, n_folds, shrinkage)
   margins <- .score_margins(scores, y_sim)
-  if (any(margins$correct)) {
-    threshold <- unname(stats::quantile(
-      margins$top_margin[margins$correct], probs = margin_coverage, type = 1
-    ))
-    held_out <- !margins$correct & margins$annotation_margin > threshold
-  }
+  threshold <- .holdout_threshold(scores, margins$correct, margin_coverage)
+  held_out <- !margins$correct & margins$annotation_margin > threshold
   if (isTRUE(refit_clean) && any(held_out)) {
     clean_counts <- table(y_sim[!held_out])
     keep <- y_sim %in% names(clean_counts)[clean_counts >= 2L]

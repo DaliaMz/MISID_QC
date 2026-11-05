@@ -34,11 +34,12 @@ predicted identity equals the observed identity. Below this, the function
 warns, skips the clean refit and returns every sample as
 \code{"insufficient_evidence"} (no clean predictions, flags or corrections),
 keeping raw scores, margins and the remaining outputs.}
-\item{margin_coverage}{Fraction of correctly predicted samples that must fall
-at or below the top-versus-second raw score margin threshold. Samples
-predicted incorrectly with an annotation margin (top versus observed score)
-above this threshold are treated as confidently misassigned and excluded from
-the threshold reference set.}
+\item{margin_coverage}{Quantile of the margins between each correctly
+predicted sample's top score and its score for every other identity (all
+alternatives pooled, not just the second best). Samples predicted incorrectly
+with an annotation margin (top versus observed score) above this threshold are
+treated as confidently misassigned and excluded from the threshold reference
+set.}
 \item{refit_clean}{Whether to refit the out-of-fold models after removing
 confidently misassigned samples from training, and use those second-pass
 scores for calibration and all downstream metrics. Individuals with fewer than

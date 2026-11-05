@@ -35,11 +35,12 @@
 #'   warns, skips the clean refit and returns every sample as
 #'   `"insufficient_evidence"` (no clean predictions, flags or corrections),
 #'   keeping raw scores, margins and the remaining outputs.
-#' @param margin_coverage Fraction of correctly predicted samples that must
-#'   fall at or below the top-versus-second raw score margin threshold. Samples
-#'   predicted incorrectly with an annotation margin (top versus observed
-#'   score) above this threshold are treated as confidently misassigned and
-#'   excluded from the threshold reference set.
+#' @param margin_coverage Quantile of the margins between each correctly
+#'   predicted sample's top score and its score for every other identity (all
+#'   alternatives pooled, not just the second best). Samples predicted
+#'   incorrectly with an annotation margin (top versus observed score) above
+#'   this threshold are treated as confidently misassigned and excluded from
+#'   the threshold reference set.
 #' @param refit_clean Whether to refit the out-of-fold models after removing
 #'   confidently misassigned samples from training, and use those second-pass
 #'   scores for calibration and all downstream metrics. Individuals with fewer
@@ -243,12 +244,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
 
   top_margin <- margins$top_margin
   annotation_margin <- margins$annotation_margin
-  top_margin_threshold <- if (any(correct_identity)) {
-    unname(stats::quantile(top_margin[correct_identity],
-                           probs = margin_coverage, type = 1))
-  } else {
-    Inf
-  }
+  top_margin_threshold <- .holdout_threshold(
+    oof_scores, correct_identity, margin_coverage
+  )
   confidently_misassigned <- !correct_identity &
     annotation_margin > top_margin_threshold
   if (isTRUE(progress)) {

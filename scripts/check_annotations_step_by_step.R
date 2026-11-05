@@ -95,12 +95,9 @@ cat(sprintf("First-pass agreement %.3f (min %.3f) -> low_agreement = %s\n",
             oof_agreement, min_agreement, low_agreement))
 
 # ---- 5. First-pass hold-out of confidently misassigned samples -------------
-top_margin_threshold <- if (any(correct_identity)) {
-  unname(stats::quantile(top_margin[correct_identity],
-                         probs = margin_coverage, type = 1))
-} else {
-  Inf
-}
+top_margin_threshold <- SampleAnnotationLikelihood:::.holdout_threshold(
+  oof_scores, correct_identity, margin_coverage
+)
 confidently_misassigned <- !correct_identity &
   annotation_margin > top_margin_threshold
 first_pass_agreement <- oof_agreement
