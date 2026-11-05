@@ -21,7 +21,7 @@ custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
 #   n_features        most variable genes kept per dataset (default 2000)
 #   subset            data.table expression on the scenario parameters
 #   scenarios         R expression for scenario numbers, e.g. 1:20
-#   cv_folds, mismatch_repeats, margin_coverage, target_specificity
+#   cv_folds, mismatch_repeats, margin_coverage, target_specificity, refit_clean
 #                     comma-separated values to compare; every combination is
 #                     run, e.g.  cv_folds=5,loo mismatch_repeats=1,3
 #                     margin_coverage=0.01,0.025,0.05
@@ -55,7 +55,8 @@ opt <- list(scenarios_file = "simulations/results/gtex_scenarios.rds",
             out = "simulations/results", n_features = "2000",
             task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
             subset = "", scenarios = "", cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
-            margin_coverage = "0.025", min_agreement = "0", force = "FALSE")
+            margin_coverage = "0.025", refit_clean = "TRUE",
+            min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
   opt[[kv[1]]] <- paste(kv[-1], collapse = "=")
@@ -73,9 +74,13 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               mismatch_repeats = as.integer(as_vals(opt$mismatch_repeats)),
               margin_coverage = as.numeric(as_vals(opt$margin_coverage)),
               target_specificity = as.numeric(as_vals(opt$target_specificity)),
+              refit_clean = as.logical(as_vals(opt$refit_clean)),
               sorted = FALSE)
-configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s", cv_folds, mismatch_repeats,
-                         margin_coverage, target_specificity)]
+# The suffix is added only when refit_clean is FALSE, so names of earlier
+# (refit) results are unchanged.
+configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s", cv_folds, mismatch_repeats,
+                         margin_coverage, target_specificity,
+                         ifelse(refit_clean, "", "_norefit"))]
 task_id <- as.integer(opt$task_id); n_tasks <- as.integer(opt$n_tasks)
 stopifnot(task_id >= 1L, task_id <= n_tasks)
 dirty_dir <- file.path(opt$out, "dirty_gtex")
@@ -206,6 +211,7 @@ run_config <- function(sim, id, cfg, meta, X, md) {
                  cv_folds = folds, progress = FALSE,
                  mismatch_repeats = cfg$mismatch_repeats,
                  margin_coverage = cfg$margin_coverage,
+                 refit_clean = cfg$refit_clean,
                  target_specificity = cfg$target_specificity), check_args)
   r <- tryCatch(
     withCallingHandlers(do.call(check_annotations, args),
