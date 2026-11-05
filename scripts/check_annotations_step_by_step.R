@@ -22,6 +22,7 @@ target_specificity <- 0.95
 cv_folds <- NULL            # NULL = leave-one-sample-out
 min_agreement <- 0.7
 margin_coverage <- 0.025
+holdout_reference <- "all_alternatives" # or "top"
 refit_clean <- TRUE
 mismatch_rate <- 0.1
 mismatch_repeats <- 3L
@@ -96,7 +97,7 @@ cat(sprintf("First-pass agreement %.3f (min %.3f) -> low_agreement = %s\n",
 
 # ---- 5. First-pass hold-out of confidently misassigned samples -------------
 top_margin_threshold <- SampleAnnotationLikelihood:::.holdout_threshold(
-  oof_scores, correct_identity, margin_coverage
+  oof_scores, correct_identity, margin_coverage, holdout_reference
 )
 confidently_misassigned <- !correct_identity &
   annotation_margin > top_margin_threshold
@@ -178,7 +179,7 @@ if (!low_agreement && !is.null(mismatch_rate) && mismatch_rate > 0 &&
     draw <- .simulate_mismatches(
       x[clean, , drop = FALSE], y[clean], mismatch_rate,
       if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
-      refit_clean
+      refit_clean, holdout_reference
     )
     if (!is.null(draw)) draw$repeat_id <- r
     draw

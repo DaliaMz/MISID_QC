@@ -20,11 +20,10 @@
   )
 }
 
-# Hold-out cutoff: low quantile of the margins between each correctly predicted
-# sample's top score and its score for every other identity. This matches the
-# annotation margin of a disagreeing sample, which is also top minus the score
-# of one specific wrong identity.
-.holdout_threshold <- function(scores, correct, coverage) {
+# Hold-out cutoff based on margins from correctly predicted samples.
+.holdout_threshold <- function(scores, correct, coverage,
+                               reference = c("all_alternatives", "top")) {
+  reference <- match.arg(reference)
   if (!any(correct)) {
     return(Inf)
   }
@@ -32,6 +31,9 @@
   top_cell <- cbind(seq_len(nrow(scores)), max.col(scores, ties.method = "first"))
   margins <- scores[top_cell] - scores
   margins[top_cell] <- NA_real_
+  if (reference == "top") {
+    margins <- apply(margins, 1L, min, na.rm = TRUE)
+  }
   unname(stats::quantile(margins, probs = coverage, type = 1, na.rm = TRUE))
 }
 
@@ -57,7 +59,8 @@
 # the same confidently-misassigned hold-out and clean refit as the real data,
 # so agreement with the true labels can be measured.
 .simulate_mismatches <- function(x, y, rate, n_folds, shrinkage,
-                                 margin_coverage, refit_clean) {
+                                 margin_coverage, refit_clean,
+                                 holdout_reference) {
   y_sim <- .swap_labels(y, max(1L, round(rate * length(y) / 2)))
   if (all(y_sim == y)) {
     return(NULL)
@@ -66,7 +69,8 @@
   held_out <- rep(FALSE, length(y))
   scores <- .refit_oof_scores(x, y_sim, held_out, n_folds, shrinkage)
   margins <- .score_margins(scores, y_sim)
-  threshold <- .holdout_threshold(scores, margins$correct, margin_coverage)
+  threshold <- .holdout_threshold(scores, margins$correct, margin_coverage,
+                                  holdout_reference)
   held_out <- !margins$correct & margins$annotation_margin > threshold
   if (isTRUE(refit_clean) && any(held_out)) {
     clean_counts <- table(y_sim[!held_out])

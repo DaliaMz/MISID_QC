@@ -30,6 +30,14 @@ stopifnot(isTRUE(all.equal(
                   byrow = TRUE))
 )))
 
+holdout_scores <- matrix(c(10, 9, 0), nrow = 1L,
+                         dimnames = list("sample", c("a", "b", "c")))
+holdout_threshold <- get(".holdout_threshold",
+                         asNamespace("SampleAnnotationLikelihood"))
+stopifnot(holdout_threshold(holdout_scores, TRUE, 0.75, "top") == 1)
+stopifnot(holdout_threshold(holdout_scores, TRUE, 0.75,
+                            "all_alternatives") == 10)
+
 progress_messages <- character()
 withCallingHandlers(
   result <- check_annotations(expression, metadata, "sample", "individual",
@@ -59,6 +67,19 @@ stopifnot(!anyNA(result$predictions$predicted_id))
 stopifnot(!any(!is.na(result$predictions$candidate_correction) &
                  !result$predictions$confident_prediction))
 stopifnot(length(result$calibration$abstain_reason_counts) == 2L)
+stopifnot(identical(result$calibration$holdout_reference,
+                    "all_alternatives"))
+top_reference <- check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  holdout_reference = "top"
+)
+stopifnot(identical(top_reference$calibration$holdout_reference, "top"))
+stopifnot(inherits(
+  try(check_annotations(expression, metadata, "sample", "individual",
+                        progress = FALSE, holdout_reference = "invalid"),
+      silent = TRUE),
+  "try-error"
+))
 stopifnot(all(c("observed", "simulated") %in% result$risk_coverage$source))
 stopifnot(all(is.finite(result$risk_coverage$coverage)))
 pdf(NULL)

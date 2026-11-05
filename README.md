@@ -32,9 +32,11 @@ agreement gate (`min_agreement`, default 70%) must be met; confidently
 misassigned samples are held out of the reference set and the models are refit
 on clean samples. A sample is confidently misassigned when its prediction
 disagrees with its label and its annotation margin (top versus observed label)
-exceeds the `margin_coverage` quantile (default 0.025) of the margins between
-the top score and every other identity, pooled over all correctly predicted
-samples. The label-swap simulation applies the same rule. Flagging uses a margin threshold, and a label-swap simulation
+exceeds the `margin_coverage` quantile (default 0.025) of reference margins
+from correctly predicted samples. `holdout_reference = "all_alternatives"`
+(default) pools top-minus-each-alternative margins; `"top"` uses only
+top-minus-second margins. The label-swap simulation applies the same rule.
+Flagging uses a margin threshold, and a label-swap simulation
 supplies known-truth agreement for `plot_risk_coverage()`. Margins
 are **not** annotation-correctness probabilities: no absolute probability
 that a sample is correctly annotated is reported because the true error

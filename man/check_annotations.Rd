@@ -5,7 +5,8 @@
 check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
-  min_agreement = 0.7, margin_coverage = 0.025, refit_clean = TRUE,
+  min_agreement = 0.7, margin_coverage = 0.025,
+  holdout_reference = c("all_alternatives", "top"), refit_clean = TRUE,
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
   unknown_mad = 3,
   grouped_unknown_validation = FALSE,
@@ -34,12 +35,14 @@ predicted identity equals the observed identity. Below this, the function
 warns, skips the clean refit and returns every sample as
 \code{"insufficient_evidence"} (no clean predictions, flags or corrections),
 keeping raw scores, margins and the remaining outputs.}
-\item{margin_coverage}{Quantile of the margins between each correctly
-predicted sample's top score and its score for every other identity (all
-alternatives pooled, not just the second best). Samples predicted incorrectly
-with an annotation margin (top versus observed score) above this threshold are
-treated as confidently misassigned and excluded from the threshold reference
-set.}
+\item{margin_coverage}{Quantile used to set the first-pass holdout cutoff.
+The reference values are chosen by \code{holdout_reference}.}
+\item{holdout_reference}{Whether to use the top-versus-second margin
+(\code{"top"}) or pool the top-versus-each-alternative margins
+(\code{"all_alternatives"}) from correctly predicted samples. Samples
+predicted incorrectly with an annotation margin (top versus observed score)
+above this threshold are treated as confidently misassigned and excluded from
+the threshold reference set. The same choice is applied to simulated mismatches.}
 \item{refit_clean}{Whether to refit the out-of-fold models after removing
 confidently misassigned samples from training, and use those second-pass
 scores for calibration and all downstream metrics. Individuals with fewer than

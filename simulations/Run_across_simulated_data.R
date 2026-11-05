@@ -23,10 +23,12 @@ custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
 #   combine    TRUE to only combine the finished row files into the summary
 #   subset     data.table expression on the scenario parameters, e.g. "rep == 1"
 #   scenarios  R expression for scenario numbers, e.g. 1:20
-#   cv_folds, mismatch_repeats, target_specificity, margin_coverage, refit_clean
+#   cv_folds, mismatch_repeats, target_specificity, margin_coverage,
+#   holdout_reference, refit_clean
 #              comma-separated values to compare; every combination is run, e.g.
 #              cv_folds=5,loo mismatch_repeats=1,3 target_specificity=0.9,0.95,0.99
-#              margin_coverage=0.01,0.025,0.05 refit_clean=TRUE,FALSE
+#              margin_coverage=0.01,0.025,0.05
+#              holdout_reference=all_alternatives,top refit_clean=TRUE,FALSE
 #              ("loo" = leave-one-out). Defaults: 5, 3, 0.95, 0.025, TRUE
 #   force      TRUE to recompute scenarios that already have a row file
 #   min_agreement  agreement gate passed to check_annotations() (default 0 =
@@ -51,7 +53,9 @@ opt <- list(input = "simulations/results/simulated_datasets_v2.rds",
             task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
             combine = "FALSE",
             cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
-            margin_coverage = "0.025", refit_clean = "TRUE", min_agreement = "0", force = "FALSE")
+            margin_coverage = "0.025", refit_clean = "TRUE",
+            holdout_reference = "all_alternatives",
+            min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
   opt[[kv[1]]] <- paste(kv[-1], collapse = "=")
@@ -69,12 +73,15 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               mismatch_repeats = as.integer(as_vals(opt$mismatch_repeats)),
               target_specificity = as.numeric(as_vals(opt$target_specificity)),
               margin_coverage = as.numeric(as_vals(opt$margin_coverage)),
+              holdout_reference = as_vals(opt$holdout_reference),
               refit_clean = as.logical(as_vals(opt$refit_clean)),
               sorted = FALSE)
 # Suffixes only for non-default values, so names of earlier results are unchanged.
-configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s", cv_folds, mismatch_repeats,
+configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s", cv_folds, mismatch_repeats,
                          target_specificity,
                          ifelse(margin_coverage == 0.025, "", paste0("_mc", margin_coverage)),
+                         ifelse(holdout_reference == "all_alternatives", "",
+                                paste0("_hr", holdout_reference)),
                          ifelse(refit_clean, "", "_norefit"))]
 dirty_dir <- file.path(opt$out, "dirty")
 rows_dir <- file.path(opt$out, "rows")
@@ -198,6 +205,7 @@ run_config <- function(sim, id, cfg, meta, X, md) {
                  cv_folds = folds, progress = FALSE,
                  mismatch_repeats = cfg$mismatch_repeats,
                  margin_coverage = cfg$margin_coverage,
+                 holdout_reference = cfg$holdout_reference,
                  refit_clean = cfg$refit_clean,
                  target_specificity = cfg$target_specificity), check_args)
   r <- tryCatch(

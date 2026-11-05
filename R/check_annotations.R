@@ -35,12 +35,15 @@
 #'   warns, skips the clean refit and returns every sample as
 #'   `"insufficient_evidence"` (no clean predictions, flags or corrections),
 #'   keeping raw scores, margins and the remaining outputs.
-#' @param margin_coverage Quantile of the margins between each correctly
-#'   predicted sample's top score and its score for every other identity (all
-#'   alternatives pooled, not just the second best). Samples predicted
+#' @param margin_coverage Quantile used to set the first-pass holdout cutoff.
+#'   The reference values are chosen by `holdout_reference`.
+#' @param holdout_reference Whether to use the top-versus-second margin
+#'   (`"top"`) or pool the top-versus-each-alternative margins
+#'   (`"all_alternatives"`) from correctly predicted samples. Samples predicted
 #'   incorrectly with an annotation margin (top versus observed score) above
 #'   this threshold are treated as confidently misassigned and excluded from
-#'   the threshold reference set.
+#'   the threshold reference set. The same choice is applied to simulated
+#'   mismatches.
 #' @param refit_clean Whether to refit the out-of-fold models after removing
 #'   confidently misassigned samples from training, and use those second-pass
 #'   scores for calibration and all downstream metrics. Individuals with fewer
@@ -111,6 +114,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               assess_feasibility = TRUE,
                               progress = interactive(), cv_folds = NULL,
                               min_agreement = 0.7, margin_coverage = 0.025,
+                              holdout_reference = c("all_alternatives", "top"),
                               refit_clean = TRUE, mismatch_rate = 0.1,
                               min_accuracy = 0.9, detect_unknown = TRUE,
                               unknown_mad = 3,
@@ -152,6 +156,12 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       target_specificity <= 0 || target_specificity >= 1) {
     stop("target_specificity must be a single number between 0 and 1.")
   }
+  if (!is.numeric(margin_coverage) || length(margin_coverage) != 1L ||
+      !is.finite(margin_coverage) || margin_coverage < 0 ||
+      margin_coverage > 1) {
+    stop("margin_coverage must be a single number between 0 and 1.")
+  }
+  holdout_reference <- match.arg(holdout_reference)
   if (!is.numeric(mismatch_repeats) || length(mismatch_repeats) != 1L ||
       !is.finite(mismatch_repeats) || mismatch_repeats < 1L ||
       mismatch_repeats != floor(mismatch_repeats)) {
@@ -245,7 +255,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   top_margin <- margins$top_margin
   annotation_margin <- margins$annotation_margin
   top_margin_threshold <- .holdout_threshold(
-    oof_scores, correct_identity, margin_coverage
+    oof_scores, correct_identity, margin_coverage, holdout_reference
   )
   confidently_misassigned <- !correct_identity &
     annotation_margin > top_margin_threshold
@@ -360,7 +370,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       draw <- .simulate_mismatches(
         x[clean, , drop = FALSE], y[clean], mismatch_rate,
         if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
-        refit_clean
+        refit_clean, holdout_reference
       )
       if (!is.null(draw)) draw$repeat_id <- r
       draw
@@ -563,6 +573,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     method = "score_margin_threshold",
     margin_threshold = margin_threshold,
     exclusion_margin_threshold = top_margin_threshold,
+    holdout_reference = holdout_reference,
     abstain_margin_threshold = abstain_threshold,
     prediction_coverage = mean(confident_prediction),
     abstain_reason_counts = abstain_reason_counts,

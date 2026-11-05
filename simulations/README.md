@@ -58,6 +58,12 @@ reported and true sensitivity, recovery and correction precision). To evaluate
 the other parameters (Q5), submit one-at-a-time sweeps on a subset, for example
 `RUN_ARGS="cv_folds=5 mismatch_repeats=1,3,5 subset=rep==1"`. Use a new `out=`
 directory or `force=TRUE` after changing the package.
+The holdout reference can also be compared with
+`holdout_reference=all_alternatives,top`: the default pools margins to every
+alternative identity, while `top` uses only the top-versus-second margin.
+Both runners use the same selected rule for observed and simulated samples, and
+include non-default choices in the config name so their output files do not
+collide.
 
 ## GTEx benchmark scenarios and settings
 
