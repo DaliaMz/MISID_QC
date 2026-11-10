@@ -27,6 +27,7 @@
 #              margin_coverage=0.01,0.025,0.05
 #              holdout_reference=all_alternatives,top refit_clean=TRUE,FALSE
 #              ("loo" = leave-one-out). Defaults: 5, 3, 0.95, 0.025, TRUE
+#   detect_unknown TRUE/FALSE; comma-separated values to compare (default FALSE)
 #   force      TRUE to recompute scenarios that already have a row file
 #   min_agreement  agreement gate passed to check_annotations() (default 0 =
 #              off; first_pass_agreement is recorded to apply cutoffs later)
@@ -52,6 +53,7 @@ opt <- list(input = "simulations/results/simulated_datasets_v2.rds",
             cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
             margin_coverage = "0.025", refit_clean = "TRUE",
             holdout_reference = "all_alternatives",
+            detect_unknown = "FALSE",
             min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
@@ -59,8 +61,6 @@ for (a in args[grepl("=", args)]) {
 }
 # min_agreement = 0 disables the agreement gate so every scenario is fully
 # processed; first_pass_agreement is recorded to apply any cutoff afterwards.
-check_args <- list(detect_unknown = FALSE,
-                   min_agreement = as.numeric(opt$min_agreement))   # fixed arguments for check_annotations()
 # Settings to compare: every combination is run on every scenario, on the same
 # seed, so differences between configs are paired. cv_folds: a number, or
 # "loo" for leave-one-sample-out (cv_folds = NULL in the package). A number
@@ -72,14 +72,16 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               margin_coverage = as.numeric(as_vals(opt$margin_coverage)),
               holdout_reference = as_vals(opt$holdout_reference),
               refit_clean = as.logical(as_vals(opt$refit_clean)),
+              detect_unknown = as.logical(as_vals(opt$detect_unknown)),
               sorted = FALSE)
 # Suffixes only for non-default values, so names of earlier results are unchanged.
-configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s", cv_folds, mismatch_repeats,
+          configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s", cv_folds, mismatch_repeats,
                          target_specificity,
                          ifelse(margin_coverage == 0.025, "", paste0("_mc", margin_coverage)),
                          ifelse(holdout_reference == "all_alternatives", "",
                                 paste0("_hr", holdout_reference)),
-                         ifelse(refit_clean, "", "_norefit"))]
+                    ifelse(refit_clean, "", "_norefit"),
+                    ifelse(detect_unknown, "_du", ""))]
 dirty_dir <- file.path(opt$out, "dirty")
 rows_dir <- file.path(opt$out, "rows")
 for (d in c(dirty_dir, rows_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
@@ -198,6 +200,8 @@ run_config <- function(sim, id, cfg, meta, X, md) {
   warn <- character()
   set.seed(sim$params$seed)   # same draws for every config of a scenario
   t0 <- Sys.time()
+  check_args <- list(detect_unknown = cfg$detect_unknown,
+                     min_agreement = as.numeric(opt$min_agreement))
   args <- c(list(expr = X, metadata = md, sample_col = "sample", id_col = "label",
                  cv_folds = folds, progress = FALSE,
                  mismatch_repeats = cfg$mismatch_repeats,

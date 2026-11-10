@@ -4,16 +4,49 @@
 # inspect each intermediate object. Every variable keeps the name it has inside
 # check_annotations(), so the decisions can be compared line by line.
 #
-# Before running, define `expr` (features x samples, finite, transformed) and
-# `metadata` (data frame) in your session, or edit the INPUTS section.
+# Choose a saved simulated dataset or GTEx scenario in the INPUTS section.
 
 # ---- 0. Setup ---------------------------------------------------------------
 source("R/lda.R")
 source("R/validation.R")
 
-# ---- 1. Inputs and parameters ----------------------------------------------
-# expr <- readRDS("path/to/expr.rds")
-# metadata <- read.csv("path/to/metadata.csv")
+# ---- 1. Load a scenario -----------------------------------------------------
+input_source <- "simulated" # or "gtex"
+scenario_id <- NULL         # NULL selects the first saved scenario
+simulated_file <- "simulations/results/simulated_datasets_v2.rds"
+gtex_scenarios_file <- "simulations/results/gtex_scenarios.rds"
+gtex_expr_file <- "/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/GTEX/data/GTEx_v11_VST.rds"
+gtex_n_features <- 2000L
+
+if (input_source == "simulated") {
+  scenarios <- readRDS(simulated_file)
+  if (is.null(scenario_id)) scenario_id <- names(scenarios)[[1L]]
+  scenario_index <- match(as.character(scenario_id), names(scenarios))
+  if (is.na(scenario_index)) stop("Scenario not found: ", scenario_id)
+  selected <- scenarios[[scenario_index]]
+  expr <- t(selected$X)
+  scenario_metadata <- as.data.frame(selected$meta)
+} else if (input_source == "gtex") {
+  scenarios <- readRDS(gtex_scenarios_file)
+  if (is.null(scenario_id)) scenario_id <- names(scenarios)[[1L]]
+  scenario_index <- match(as.character(scenario_id), names(scenarios))
+  if (is.na(scenario_index)) stop("Scenario not found: ", scenario_id)
+  selected <- scenarios[[scenario_index]]
+  scenario_metadata <- as.data.frame(selected$meta)
+  expr_vst <- readRDS(gtex_expr_file)
+  expr <- expr_vst[, scenario_metadata$sample, drop = FALSE]
+  feature_variance <- apply(expr, 1L, var)
+  selected_features <- order(feature_variance, decreasing = TRUE)[
+    seq_len(min(gtex_n_features, nrow(expr)))
+  ]
+  expr <- expr[selected_features, , drop = FALSE]
+} else {
+  stop("input_source must be 'simulated' or 'gtex'.")
+}
+
+metadata <- scenario_metadata
+metadata$sample_id <- as.character(metadata$sample)
+metadata$individual_id <- as.character(metadata$label_observed)
 sample_col <- "sample_id"
 id_col <- "individual_id"
 

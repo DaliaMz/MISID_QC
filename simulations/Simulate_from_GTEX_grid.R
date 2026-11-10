@@ -32,16 +32,20 @@ if (!exists("expr_vst") || !exists("sample_info")) {
 if (!exists("min_tissue_samples")) min_tissue_samples <- 200  # tissues eligible for sets
 if (!exists("n_features")) n_features <- 2000                  # most variable genes per dataset
 if (!exists("n_unknown_individuals")) n_unknown_individuals <- 1L
+if (!exists("n_unknown_tissues")) n_unknown_tissues <- 1L
 if (!exists("unknown_samples_per_individual")) unknown_samples_per_individual <- 2L
 if (length(n_unknown_individuals) != 1L || !is.numeric(n_unknown_individuals) ||
-    !is.finite(n_unknown_individuals) || n_unknown_individuals < 0 ||
-    n_unknown_individuals != floor(n_unknown_individuals) ||
+  !is.finite(n_unknown_individuals) || n_unknown_individuals < 0 ||
+  n_unknown_individuals != floor(n_unknown_individuals) ||
+  length(n_unknown_tissues) != 1L || !is.numeric(n_unknown_tissues) ||
+  !is.finite(n_unknown_tissues) || n_unknown_tissues < 0 ||
+  n_unknown_tissues != floor(n_unknown_tissues) ||
     length(unknown_samples_per_individual) != 1L ||
     !is.numeric(unknown_samples_per_individual) ||
     !is.finite(unknown_samples_per_individual) ||
     unknown_samples_per_individual < 1 ||
     unknown_samples_per_individual != floor(unknown_samples_per_individual)) {
-  stop("n_unknown_individuals must be a non-negative integer and unknown_samples_per_individual must be a positive integer.")
+  stop("n_unknown_individuals and n_unknown_tissues must be non-negative integers; unknown_samples_per_individual must be a positive integer.")
 }
 
 meta_all <- data.table(sample = colnames(expr_vst))
@@ -142,6 +146,13 @@ make_individual_scenario <- function(n_labels, n_per_label, set, n_tissues = NUL
 
 build_scenario <- function(g) {
   set.seed(g$seed)
+  n_unknown <- if (g$task == "tissue") {
+    if ("n_unknown_tissues" %in% names(g)) g$n_unknown_tissues else
+      n_unknown_tissues
+  } else {
+    if ("n_unknown_individuals" %in% names(g)) g$n_unknown_individuals else
+      n_unknown_individuals
+  }
   d <- if (g$task == "tissue") {
     make_tissue_scenario(g$n_labels, g$n_per_label, g$set)
   } else {
@@ -152,23 +163,43 @@ build_scenario <- function(g) {
   if (is.null(mi)) return(NULL)
   d[, `:=`(label_observed = mi$label, is_misid = mi$is_misid,
            is_unknown = FALSE)]
-  if (g$task == "individual" && n_unknown_individuals > 0L) {
-    enrolled <- unique(d$label_true)
-    tissues <- strsplit(d$tissues[1L], "|", fixed = TRUE)[[1L]]
-    pool <- meta_all[SMTSD %in% tissues & !ID %in% enrolled]
-    eligible <- pool[, .N, by = ID][N >= unknown_samples_per_individual, ID]
-    if (length(eligible) < n_unknown_individuals) {
-      stop("Scenario ", g$scenario, ": not enough eligible unknown donors (need ",
-           n_unknown_individuals, ", found ", length(eligible), ").")
+  if (n_unknown > 0L) {
+    enrolled_labels <- unique(d$label_true)
+    if (g$task == "tissue") {
+      eligible <- meta_all[!SMTS %in% enrolled_labels,
+                           .(n_donors = uniqueN(ID)), by = SMTS][
+                             n_donors >= g$n_per_label, SMTS]
+      if (length(eligible) < n_unknown) {
+        stop("Scenario ", g$scenario, ": not enough eligible unknown tissues (need ",
+             n_unknown, ", found ", length(eligible), ").")
+      }
+      chosen <- sample(eligible, n_unknown)
+      strangers <- rbindlist(lapply(chosen, function(tissue) {
+        x <- meta_all[SMTS == tissue][sample(.N)]
+        x <- x[!duplicated(ID)][seq_len(g$n_per_label)]
+        x[, label_true := tissue]
+        x
+      }))
+      strangers[, label_observed := enrolled_labels[
+        sample.int(length(enrolled_labels), .N, replace = TRUE)]]
+    } else {
+      enrolled_ids <- unique(d$ID)
+      pool <- meta_all[SMTSD %in% unique(d$SMTSD) & !ID %in% enrolled_ids]
+      eligible <- pool[, .N, by = ID][N >= unknown_samples_per_individual, ID]
+      if (length(eligible) < n_unknown) {
+        stop("Scenario ", g$scenario, ": not enough eligible unknown donors (need ",
+             n_unknown, ", found ", length(eligible), ").")
+      }
+      chosen <- eligible[sample.int(length(eligible), n_unknown)]
+      strangers <- pool[ID %in% chosen][
+        , .SD[sample.int(.N, unknown_samples_per_individual)], by = ID]
+      strangers[, `:=`(
+        label_true = ID,
+        label_observed = enrolled_labels[
+          sample.int(length(enrolled_labels), .N, replace = TRUE)]
+      )]
     }
-    chosen <- eligible[sample.int(length(eligible), n_unknown_individuals)]
-    strangers <- pool[ID %in% chosen][
-      , .SD[sample.int(.N, unknown_samples_per_individual)], by = ID]
-    strangers[, `:=`(
-      label_true = ID,
-      label_observed = enrolled[sample.int(length(enrolled), .N, replace = TRUE)],
-      is_misid = TRUE, is_unknown = TRUE
-    )]
+    strangers[, `:=`(is_misid = TRUE, is_unknown = TRUE)]
     d <- rbindlist(list(d, strangers), use.names = TRUE, fill = TRUE)
   }
   d[, .(sample, ID, SMTS, SMTSD, label_true, label_observed, is_misid,
@@ -220,14 +251,39 @@ grid[, seed := 5000L + scenario]
 grid <- grid[set %in% keep_sets & misid_rate %in% keep_rates &
                (task == "tissue" | n_per_label %in% keep_individual_n)]
 
+expand_unknown_grid <- function(task_grid, task, count, scenario_offset) {
+  levels <- if (count == 0L) 0L else c(0L, as.integer(count))
+  task_grid[, `:=`(base_scenario = scenario, base_seed = seed)]
+  expanded <- task_grid[rep(seq_len(.N), each = length(levels))]
+  unknown_count <- rep(levels, times = nrow(expanded) / length(levels))
+  expanded[, `:=`(n_unknown_individuals = 0L, n_unknown_tissues = 0L)]
+  expanded[[if (task == "tissue") "n_unknown_tissues" else
+    "n_unknown_individuals"]] <- unknown_count
+  expanded[, scenario := base_scenario +
+    as.integer(unknown_count == 0L & length(levels) > 1L) * scenario_offset]
+  expanded[, seed := base_seed]
+  expanded
+}
+
+scenario_offset <- max(grid$scenario)
+grid <- rbindlist(list(
+  expand_unknown_grid(copy(grid[task == "tissue"]), "tissue",
+                      n_unknown_tissues, scenario_offset),
+  expand_unknown_grid(copy(grid[task == "individual"]), "individual",
+                      n_unknown_individuals, scenario_offset)
+), use.names = TRUE)
+
 simulate_gtex_grid <- function(grid) {
   res <- lapply(seq_len(nrow(grid)), function(i) {
     m <- build_scenario(grid[i])
     if (is.null(m)) return(NULL)
     params <- copy(grid[i])
     params[, `:=`(
-      n_unknown_individuals = uniqueN(m[is_unknown == TRUE, label_true]),
-      unknown_samples_per_individual = unknown_samples_per_individual
+      unknown_samples_per_individual = if (task == "individual") {
+        unknown_samples_per_individual
+      } else {
+        NA_integer_
+      }
     )]
     list(meta = m, params = params)
   })

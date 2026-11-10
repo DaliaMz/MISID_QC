@@ -31,30 +31,30 @@ turned off and do not report unknown-detection metrics. Not covered:
 structured (non-random) mislabels or variation in the number of labels,
 features or batches in the simulated data.
 
-## Unknown individuals
+## Unknown individuals and tissues
 
-By default, the synthetic scenarios and the GTEx **individual** scenarios add
-one unknown individual with two samples. Their true identity has no enrolled
-samples, while each sample receives a randomly chosen enrolled observed label.
-`meta$is_unknown` identifies these samples; they also have `is_misid = TRUE`
-because their observed labels are wrong. `misid_rate` controls only the
-mislabels among enrolled samples, so a zero mislabel rate is not a completely
-clean scenario unless unknowns are disabled.
+By default, the synthetic scenarios and GTEx **individual** scenarios add one
+unknown individual with two samples. GTEx **tissue** scenarios add one unknown
+tissue class, sampled from an `SMTS` tissue absent from that scenario's enrolled
+labels. Unknown samples receive an observed label from an enrolled class and
+have `is_unknown = TRUE` and `is_misid = TRUE`. Each base GTEx scenario also has
+a paired version with no unknowns. `misid_rate` controls only the mislabels
+among enrolled samples, so a zero mislabel rate is not a completely clean
+scenario unless unknowns are disabled.
 
-GTEx unknown donors come from the same selected tissue set as the enrolled
-donors. Tissue-label scenarios do not add unknown donors: a donor is not an
-unknown tissue. Both generators record the number of unknown individuals and
-samples per unknown in scenario parameters. To change the defaults when
-sourcing either generator, set `n_unknown_individuals` and
-`unknown_samples_per_individual` first; set `n_unknown_individuals <- 0L` for
-the original no-unknown design. The synthetic generator also accepts these
-arguments in `simulate_dataset()`. GTEx stops with an error if too few eligible
-donors are available.
+To change the defaults when sourcing the GTEx generator, set
+`n_unknown_individuals`, `n_unknown_tissues` and
+`unknown_samples_per_individual` first. Set the relevant count to `0L` to
+disable unknowns for that task. The synthetic generator uses
+`n_unknown_individuals` and `unknown_samples_per_individual`, and also accepts
+these arguments in `simulate_dataset()`. GTEx stops with an error if too few
+eligible unknown donors or tissues are available.
 
 For example, from the repository root in an R session:
 
 ```r
 n_unknown_individuals <- 1L
+n_unknown_tissues <- 1L
 unknown_samples_per_individual <- 2L
 source("simulations/Simulate_full_dataset.R")
 sims <- simulate_grid(grid)
@@ -79,8 +79,9 @@ and prints the key numbers. Q1 to Q4 use one config (the most common, or
 
 ## Simulated-dataset benchmark
 
-`Simulate_full_dataset.R` builds 360 scenarios as one crossed design with 3
-repetitions per cell. Gaussian (324) is the full factorial of label variance
+`Simulate_full_dataset.R` builds 360 base settings as one crossed design with 3
+repetitions per cell. Each setting has an unknown and a no-unknown version,
+giving 720 scenarios total. Gaussian (324 base settings) is the full factorial of label variance
 (0.05, 0.2, 0.5), nuisance variance (none, or discrete 0.3 plus continuous
 0.2), samples per label (6, 10, 20) and mislabel rate (0, 0.02, 0.05, 0.1, 0.2,
 0.4). RNA-seq and Olink (18 each) check that the findings carry over, at label
@@ -101,6 +102,10 @@ reported and true sensitivity, recovery and correction precision). To evaluate
 the other parameters (Q5), submit one-at-a-time sweeps on a subset, for example
 `RUN_ARGS="cv_folds=5 mismatch_repeats=1,3,5 subset=rep==1"`. Use a new `out=`
 directory or `force=TRUE` after changing the package.
+Both runners also accept `detect_unknown=TRUE,FALSE` to run each scenario in
+both detection modes; the default is `FALSE`. For PBS, submit with
+`RUN_ARGS='cv_folds=5 detect_unknown=TRUE,FALSE' qsub simulations/run_sims.pbs`
+or use `run_gtex.pbs` for the GTEx benchmark.
 The holdout reference can also be compared with
 `holdout_reference=all_alternatives,top`: the default pools margins to every
 alternative identity, while `top` uses only the top-versus-second margin.
@@ -110,10 +115,11 @@ collide.
 
 ## GTEx benchmark scenarios and settings
 
-`Simulate_from_GTEX_grid.R` builds 150 scenarios: tissue (6 or 12 tissues, 10
+`Simulate_from_GTEX_grid.R` builds 150 base settings: tissue (6 or 12 tissues, 10
 or 20 samples each) and individual (20 or 40 individuals; 4, 10 or all
 samples) tasks with random tissue sets only, at mislabel rates 0, 0.05, 0.1,
-0.2 and 0.4, with 3 repetitions. The numbering and seeds come from the original
+0.2 and 0.4, with 3 repetitions. Each base setting has an unknown-class and a
+no-unknown version, for up to 300 scenarios. The numbering and seeds come from the original
 grid, so scenarios shared with earlier runs keep their numbers and seeds. Set
 `keep_sets`, `keep_rates` or `keep_individual_n` before sourcing to change the
 subset. The runners default to 5-fold CV and

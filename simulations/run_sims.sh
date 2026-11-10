@@ -12,8 +12,8 @@
 # Afterwards:   Rscript simulations/Run_across_simulated_data.R combine=TRUE
 #               (writes simulations/results/summary_v2.rds and .csv)
 #
-# The 360 simulated scenarios are split over 60 array tasks (task k takes
-# scenarios k, k+60, ..., interleaved so slow scenarios spread evenly). Change
+# The 720 simulated scenarios (360 settings with and without unknowns) are split
+# over 60 array tasks (task k takes scenarios k, k+60, ..., 12 each). Change
 # --array and N_TASKS together; "%25" caps how many tasks run at once. Each task
 # writes its own row files, so tasks never write to the same file, and a task
 # that is requeued or times out resumes because finished scenarios are skipped.

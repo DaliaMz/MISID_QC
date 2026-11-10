@@ -162,8 +162,18 @@ grid[, scenario := .I]
 grid[, seed := 1000L + scenario]
 if (!exists("n_unknown_individuals")) n_unknown_individuals <- 1L
 if (!exists("unknown_samples_per_individual")) unknown_samples_per_individual <- 2L
-grid[, `:=`(n_unknown_individuals = n_unknown_individuals,
-            unknown_samples_per_individual = unknown_samples_per_individual)]
+grid[, unknown_samples_per_individual := unknown_samples_per_individual]
+if (n_unknown_individuals == 0L) {
+  grid[, n_unknown_individuals := 0L]
+} else {
+  no_unknown_grid <- copy(grid)
+  no_unknown_grid[, `:=`(
+    scenario = scenario + max(grid$scenario),
+    n_unknown_individuals = 0L
+  )]
+  grid[, n_unknown_individuals := n_unknown_individuals]
+  grid <- rbind(grid, no_unknown_grid, use.names = TRUE)
+}
 
 # Each scenario has its own seed, so changing the grid does not change the
 # data of the remaining scenarios.

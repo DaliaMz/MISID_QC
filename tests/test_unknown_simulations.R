@@ -3,6 +3,15 @@ library(data.table)
 
 synthetic <- new.env(parent = globalenv())
 sys.source("simulations/Simulate_full_dataset.R", envir = synthetic)
+synthetic_grid_counts <- synthetic$grid[, .N, by = .(
+  type, var_label, nuisance, n_per_label, misid_rate, rep
+)]
+stopifnot(nrow(synthetic_grid_counts) == 360L,
+          all(synthetic_grid_counts$N == 2L),
+          setequal(synthetic$grid$n_unknown_individuals, c(0L, 1L)),
+          setequal(synthetic$grid[ n_unknown_individuals == 1L, scenario], 1:360),
+          setequal(synthetic$grid[n_unknown_individuals == 0L, scenario], 361:720),
+          !anyDuplicated(synthetic$grid$scenario))
 for (type in c("gaussian", "rnaseq", "olink")) {
   set.seed(42)
   sim <- synthetic$simulate_dataset(
@@ -64,6 +73,7 @@ gtex$expr_vst <- matrix(rnorm(20L * nrow(samples)), nrow = 20L,
                         dimnames = list(NULL, samples$sample))
 gtex$min_tissue_samples <- 20L
 gtex$n_unknown_individuals <- 2L
+gtex$n_unknown_tissues <- 1L
 gtex$unknown_samples_per_individual <- 2L
 sys.source("simulations/Simulate_from_GTEX_grid.R", envir = gtex)
 scenario <- data.table(task = "individual", n_labels = 10L, n_per_label = 4,
@@ -92,6 +102,34 @@ stopifnot(inherits(try(gtex$build_scenario(scenario), silent = TRUE),
                    "try-error"))
 gtex$n_unknown_individuals <- 2L
 tissue <- copy(scenario)
-tissue[, `:=`(task = "tissue", n_labels = 3L, n_per_label = 4)]
+tissue[, `:=`(task = "tissue", n_labels = 3L, n_per_label = 4,
+        n_unknown_tissues = 1L)]
+tissue_meta <- gtex$build_scenario(tissue)
+tissue_unknown <- tissue_meta[is_unknown == TRUE]
+tissue_known <- tissue_meta[is_unknown == FALSE]
+stopifnot(nrow(tissue_unknown) == 4L,
+      uniqueN(tissue_unknown$label_true) == 1L,
+      !any(tissue_unknown$label_true %in% tissue_known$label_true),
+      all(tissue_unknown$is_misid),
+      all(tissue_unknown$label_observed %in% tissue_known$label_true),
+      !any(tissue_unknown$label_true %in% tissue_meta$label_observed),
+      uniqueN(tissue_unknown$ID) == 4L)
+tissue[, n_unknown_tissues := 0L]
 stopifnot(!any(gtex$build_scenario(tissue)$is_unknown))
-cat("Unknown-individual simulation tests passed.\n")
+gtex$n_unknown_tissues <- 100L
+stopifnot(inherits(try(gtex$build_scenario(transform(tissue, n_unknown_tissues = 100L)),
+             silent = TRUE), "try-error"))
+gtex_grid_counts <- gtex$grid[, .N, by = .(task, n_unknown_individuals,
+                       n_unknown_tissues)]
+stopifnot(setequal(gtex_grid_counts$task, c("individual", "tissue")),
+      nrow(gtex_grid_counts) == 4L,
+      all(gtex_grid_counts[task == "individual",
+                 n_unknown_tissues == 0L]),
+      setequal(gtex_grid_counts[task == "individual", n_unknown_individuals],
+           c(0L, 2L)),
+      all(gtex_grid_counts[task == "tissue",
+                 n_unknown_individuals == 0L]),
+      setequal(gtex_grid_counts[task == "tissue", n_unknown_tissues],
+           c(0L, 1L)),
+          !anyDuplicated(gtex$grid$scenario))
+cat("Unknown simulation tests passed.\n")
