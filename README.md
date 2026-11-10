@@ -27,7 +27,9 @@ plot_risk_coverage(results)
 ```
 
 The initial implementation uses leave-one-sample-out shrinkage LDA and raw
-score margins (top versus second, and top versus observed label). A first-pass
+score margins (top versus second, and top versus observed label). First-pass agreement
+below 75% triggers a warning, and below 60% the run stops unless
+`stop_on_low_agreement = FALSE`. A first-pass
 agreement gate (`min_agreement`, default 70%) must be met; confidently
 misassigned samples are held out of the reference set and the models are refit
 on clean samples. A sample is confidently misassigned when its prediction

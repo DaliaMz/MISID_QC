@@ -61,6 +61,10 @@
 #'   a cutoff tuned on the other repeats. More repeats give a less extreme
 #'   cutoff and a steadier sensitivity estimate at the cost of roughly
 #'   proportional simulation time. With 1, sensitivity is in-sample.
+#' @param stop_on_low_agreement If `TRUE` (default), the run stops with an
+#'   error when first-pass out-of-fold agreement is below 0.6, because the
+#'   calibration is then unreliable. Set to `FALSE` to proceed anyway. A
+#'   warning is always issued when first-pass agreement is below 0.75.
 #' @param diagnostics Whether to include intermediate gate data in the result.
 #'   This is intended for understanding and plotting the validation steps; it
 #'   can add substantially to the result size.
@@ -120,7 +124,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               unknown_mad = 3,
                               grouped_unknown_validation = FALSE,
                               unknown_stray_samples = 2L,
-                              mismatch_repeats = 3L, diagnostics = FALSE) {
+                              mismatch_repeats = 3L, stop_on_low_agreement = TRUE,
+                              diagnostics = FALSE) {
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -177,6 +182,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
     stop("progress must be TRUE or FALSE.")
+  }
+  if (!is.logical(stop_on_low_agreement) ||
+      length(stop_on_low_agreement) != 1L || is.na(stop_on_low_agreement)) {
+    stop("stop_on_low_agreement must be TRUE or FALSE.")
   }
   if (!is.logical(diagnostics) || length(diagnostics) != 1L ||
       is.na(diagnostics)) {
@@ -241,6 +250,20 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       "Out-of-fold agreement between predicted and observed identities: %.1f%% (minimum %.1f%%).",
       100 * oof_agreement, 100 * min_agreement
     ))
+  }
+  if (oof_agreement < 0.6 && isTRUE(stop_on_low_agreement)) {
+    stop(sprintf(
+      paste("Run stopped because first-pass agreement (%.1f%%) is below 60%%.",
+            "To proceed anyway, set stop_on_low_agreement = FALSE."),
+      100 * oof_agreement
+    ), call. = FALSE)
+  }
+  if (oof_agreement < 0.75) {
+    warning(sprintf(
+      paste("First-pass agreement (%.1f%%) is below 75%%; calibration may be",
+            "off and results may be unreliable."),
+      100 * oof_agreement
+    ), call. = FALSE)
   }
   low_agreement <- oof_agreement < min_agreement
   if (low_agreement) {

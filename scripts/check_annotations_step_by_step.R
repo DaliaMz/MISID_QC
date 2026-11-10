@@ -31,6 +31,7 @@ detect_unknown <- TRUE
 unknown_mad <- 3
 grouped_unknown_validation <- FALSE
 unknown_stray_samples <- 2L
+stop_on_low_agreement <- TRUE
 progress <- TRUE
 set.seed(123)
 
@@ -89,6 +90,16 @@ margins <- .score_margins(oof_scores, y)
 predicted_id <- margins$predicted
 correct_identity <- margins$correct
 oof_agreement <- mean(correct_identity)
+if (oof_agreement < 0.6 && stop_on_low_agreement) {
+  stop(sprintf(paste("Run stopped because first-pass agreement (%.1f%%) is",
+                     "below 60%%. To proceed anyway, set",
+                     "stop_on_low_agreement = FALSE."), 100 * oof_agreement))
+}
+if (oof_agreement < 0.75) {
+  warning(sprintf(paste("First-pass agreement (%.1f%%) is below 75%%;",
+                        "calibration may be off and results may be",
+                        "unreliable."), 100 * oof_agreement))
+}
 low_agreement <- oof_agreement < min_agreement
 top_margin <- margins$top_margin
 annotation_margin <- margins$annotation_margin

@@ -179,15 +179,22 @@ stopifnot(inherits(
 
 low <- suppressWarnings(check_annotations(
   expression, metadata, "sample", "individual", progress = FALSE,
-  min_agreement = 1.01
+  min_agreement = 1.01, stop_on_low_agreement = FALSE
 ))
 stopifnot(low$calibration$low_agreement)
 stopifnot(all(low$predictions$annotation_status == "insufficient_evidence"))
 stopifnot(all(is.na(low$predictions$predicted_id_clean)))
 stopifnot(!anyNA(low$predictions$predicted_id))
+scrambled <- metadata
+scrambled$individual <- sample(scrambled$individual)
+stopifnot(inherits(try(
+  check_annotations(expression, scrambled, "sample", "individual",
+                    progress = FALSE),
+  silent = TRUE), "try-error"))
 stopifnot(inherits(tryCatch(
   check_annotations(expression, metadata, "sample", "individual",
-                    progress = FALSE, min_agreement = 1.01),
+                    progress = FALSE, min_agreement = 1.01,
+                    stop_on_low_agreement = FALSE),
   warning = function(w) w), "warning"))
 
 # Individuals dropped at the refit and held-out samples still get a row and a call.
