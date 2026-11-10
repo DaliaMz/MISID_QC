@@ -51,6 +51,15 @@ stopifnot(any(grepl("Leave-one-sample-out models", progress_messages)))
 stopifnot(any(grepl("held-out individuals", progress_messages,
                     ignore.case = TRUE)))
 stopifnot(nrow(result$predictions) == length(ids))
+stopifnot(all(c("potential_unknown_individual", "nearest_class_distance",
+                "unknown_detection_score", "unknown_detection_threshold") %in%
+              names(result$predictions)))
+stopifnot(!any(result$predictions$annotation_status ==
+                 "potential_unknown_individual"))
+stopifnot(isTRUE(all.equal(result$predictions$unknown_detection_score,
+                           result$predictions$nearest_class_distance)))
+stopifnot(all(result$predictions$unknown_detection_threshold ==
+              result$thresholds$unknown_distance))
 stopifnot(identical(dim(result$identity_scores), c(length(ids), 3L)))
 stopifnot(identical(result$predictions$sample_id, samples))
 stopifnot(all(is.na(
@@ -216,6 +225,9 @@ dropped <- check_annotations(
 )
 dp <- dropped$predictions
 stopifnot(identical(dp$sample_id, colnames(X)))
+stopifnot(all(c("nearest_class_distance", "unknown_detection_score",
+                "unknown_detection_threshold") %in% names(dp)))
+stopifnot(all(is.na(dp$unknown_detection_score[dp$excluded_from_refit])))
 stopifnot("d1" %in% dropped$calibration$dropped_individuals)
 stopifnot(all(dp$excluded_from_refit == (dp$observed_id %in% dropped$calibration$dropped_individuals)))
 stopifnot(all(dp$suspicious[dp$sample_id %in% dropped$held_out$sample_ids]))

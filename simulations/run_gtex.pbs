@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N gtex_misid
-#PBS -J 1-30%15
+#PBS -t 1-30
 #PBS -l select=1:ncpus=1:mem=16gb
 #PBS -l walltime=24:00:00
 #PBS -o /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/gtex_misid_%J_%I.out

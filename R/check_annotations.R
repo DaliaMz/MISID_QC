@@ -111,8 +111,11 @@
 #'   `performance`, `calibration`, `risk_coverage` (see
 #'   [plot_risk_coverage()]), `mismatch_simulation`, `held_out` (count, fraction and IDs of samples held out as
 #'   confidently misassigned, from the first pass), `feasibility`, and
-#'   `thresholds` components. `predictions$annotation_status` is descriptive
-#'   (flag, abstention, agreement) and does not depend on `feasibility`;
+#'   `thresholds` components. `predictions$potential_unknown_individual` is a
+#'   separate flag, not an `annotation_status` value. Predictions also include
+#'   the nearest-class distance and the unknown-detection score and threshold.
+#'   `predictions$annotation_status` is descriptive (flag, abstention,
+#'   agreement) and does not depend on `feasibility`;
 #'   `"insufficient_evidence"` is used when the minimum-agreement gate fails,
 #'   and for unflagged samples of individuals dropped at the refit (fewer than
 #'   two clean samples; `predictions$excluded_from_refit`). Samples held out in
@@ -315,6 +318,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     sample_id = rownames(x), observed_id = y, predicted_id = predicted_id,
     observed_id_score = margins$observed_score,
     top_candidate_score = margins$top_score,
+    nearest_class_distance = nearest_distance,
     top_margin = top_margin, annotation_margin = annotation_margin,
     confidently_misassigned = confidently_misassigned,
     stringsAsFactors = FALSE
@@ -672,6 +676,14 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     top_vs_observed_score_margin = annotation_margin,
     top_score_margin = top_margin,
     annotation_score_margin = annotation_margin,
+    nearest_class_distance = nearest_distance,
+    unknown_detection_score = if (detect_unknown) unknown_statistic else
+      rep(NA_real_, length(y)),
+    unknown_detection_threshold = if (detect_unknown) {
+      rep(unknown_threshold, length(y))
+    } else {
+      rep(NA_real_, length(y))
+    },
     confidently_misassigned = confidently_misassigned,
     annotation_correctness_probability = NA_real_,
     suspicious = flagged,
@@ -764,9 +776,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   )
   # Descriptive only: feasibility is reported in `feasibility`, not folded in.
   predictions$annotation_status <- ifelse(
-    !flagged & predictions$potential_unknown_individual,
-    "potential_unknown_individual",
-    ifelse(!is.na(predictions$candidate_correction),
+    !is.na(predictions$candidate_correction),
            "suspicious_with_candidate_correction",
     ifelse(flagged, "suspicious_without_reliable_alternative",
     ifelse(!confident_prediction & predicted_id != y,
@@ -774,7 +784,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     ifelse(confident_prediction & predicted_id != y,
            "weak_disagreement",
            "no_evidence_of_incorrect_annotation"))))
-  )
   if (low_agreement) {
     # Thresholds were tuned on predictions that mostly disagree with the
     # observed labels, so no call is trustworthy; raw scores and margins stay.
@@ -947,6 +956,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       top_vs_observed_score_margin = gone$annotation_margin,
       top_score_margin = gone$top_margin,
       annotation_score_margin = gone$annotation_margin,
+      nearest_class_distance = gone$nearest_class_distance,
+      unknown_detection_score = NA_real_,
+      unknown_detection_threshold = NA_real_,
       confidently_misassigned = held_gone,
       annotation_correctness_probability = NA_real_,
       suspicious = if (low_agreement) NA else held_gone,

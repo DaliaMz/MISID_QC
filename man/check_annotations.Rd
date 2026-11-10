@@ -111,8 +111,11 @@ A list with sample-level \code{predictions}, raw \code{identity_scores},
 \code{performance}, \code{calibration}, \code{risk_coverage},
 \code{mismatch_simulation}, \code{held_out} (count, fraction and IDs of samples held
 out as confidently misassigned, from the first pass), \code{feasibility}, and
-\code{thresholds} components. \code{predictions$annotation_status} is descriptive
-(flag, abstention, agreement) and does not depend on \code{feasibility};
+\code{thresholds} components. \code{predictions$potential_unknown_individual} is a
+separate flag, not an \code{annotation_status} value. Predictions also include
+the nearest-class distance and the unknown-detection score and threshold.
+\code{predictions$annotation_status} is descriptive (flag, abstention,
+agreement) and does not depend on \code{feasibility};
 \code{"insufficient_evidence"} is used when the minimum-agreement gate fails, and for
 unflagged samples of individuals dropped at the refit (fewer than two clean samples;
 \code{predictions$excluded_from_refit}). Samples held out in the first pass are always
