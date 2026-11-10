@@ -16,7 +16,7 @@ args <- commandArgs(trailingOnly = TRUE)
 opt <- list(
   scenario = NULL,
   scenarios_file = "simulations/results/gtex_scenarios.rds",
-  expr = "/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/GTEx_v11_VST.rds",
+  expr = "/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/GTEX/data/GTEx_v11_VST.rds",
   out = "simulations/results/gtex_diagnostics",
   n_features = "2000",
   cv_folds = "5",
@@ -43,26 +43,16 @@ if (is.null(opt$scenario) || !nzchar(opt$scenario)) {
   stop("Specify scenario=<scenario number>.")
 }
 
-custom_lib <- Sys.getenv(
-  "MISID_QC_R_LIB",
-  "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
-)
-dir.create(custom_lib, recursive = TRUE, showWarnings = FALSE)
-.libPaths(c(custom_lib, .libPaths()))
-
 if (!requireNamespace("devtools", quietly = TRUE)) {
   stop("Install devtools in this R environment before running this wrapper.")
 }
 devtools::install_local(
   path = normalizePath(".", mustWork = TRUE),
-  lib = custom_lib,
   force = TRUE,
   upgrade = "never",
   quiet = TRUE
 )
-suppressPackageStartupMessages(
-  library(SampleAnnotationLikelihood, lib.loc = custom_lib)
-)
+suppressPackageStartupMessages(library(SampleAnnotationLikelihood))
 check_annotations_fun <- getExportedValue(
   "SampleAnnotationLikelihood", "check_annotations"
 )

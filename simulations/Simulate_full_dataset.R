@@ -1,6 +1,3 @@
-custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
-.libPaths(c(custom_lib, .libPaths()))
-
 # Simulate repeated-sample data with label-driven and competing variance, plus mis-identified labels.
 # Grid: data type x label variance share x discrete and continuous variance shares x samples/label.
 library(data.table)

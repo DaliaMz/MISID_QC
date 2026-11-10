@@ -1,17 +1,14 @@
-custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
-.libPaths(c(custom_lib, .libPaths()))
-
 library(data.table)
 library(tidyverse)
 library(ggplot2)
 library(DESeq2)
 
-ddir = "/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/data/"
+ddir = "/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/GTEX/data/"
 sample_info <- fread(paste0(ddir, "GTEx_Analysis_v11_Annotations_SampleAttributesDS.txt"))
 subject_info <- fread(paste0(ddir, "GTEx_Analysis_v11_Annotations_SubjectPhenotypesDS.txt"))
 source("/scratch/project_mnt/S0138/DMizikovsky/misid/benchmarking/Benchmarking_Method_Functions_201026_v3.R")
 
-expr_vst <- readRDS(paste0("/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/GTEx_v11_VST.rds"))
+expr_vst <- readRDS(paste0(ddir, "GTEx_v11_VST.rds"))
 ### make sample meta data:
 meta <- data.frame(sample = colnames(expr_vst)) %>%
   mutate(ID = sub("^([^-]+-[^-]+).*", "\\1", sample)) %>%

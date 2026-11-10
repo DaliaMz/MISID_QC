@@ -102,10 +102,8 @@ Rscript scripts/run_gtex_scenario_diagnostics.R \
   expr=/path/to/GTEx_v11_VST.rds
 ```
 
-The wrapper installs the current checkout into
-`/scratch/project/palpant_scratch/DMizikovsky/R_packages` with
-`devtools::install_local(force = TRUE)` before loading it. Set
-`MISID_QC_R_LIB` to use a different R library. It then uses the scenario's
+The wrapper installs the current checkout into the default R library with
+`devtools::install_local(force = TRUE)` before loading it. It then uses the scenario's
 observed labels, selects the top variable features within that scenario
 (default 2,000, matching the GTEx runner), disables unknown-individual
 detection, and writes a gate PDF and an RDS bundle to

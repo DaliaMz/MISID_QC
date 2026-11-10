@@ -1,6 +1,3 @@
-custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
-.libPaths(c(custom_lib, .libPaths()))
-
 # Estimate the fraction of GTEx expression variance associated with the
 # true and simulated observed labels in every GTEx scenario.
 #
@@ -13,7 +10,7 @@ suppressMessages(library(data.table))
 args <- commandArgs(trailingOnly = TRUE)
 opt <- list(
   scenarios_file = "simulations/results/gtex_scenarios.rds",
-  expr = "/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/GTEx_v11_VST.rds",
+  expr = "/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/GTEX/data/GTEx_v11_VST.rds",
   out = "simulations/results",
   n_features = "2000"
 )

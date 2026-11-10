@@ -1,6 +1,3 @@
-custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
-.libPaths(c(custom_lib, .libPaths()))
-
 # Run check_annotations() on every scenario in results/gtex_scenarios.rds
 # (made by Simulate_from_GTEX_grid.R) and score it against the known truth.
 # Same outputs as Run_across_simulated_data.R, for the GTEx scenarios.
@@ -53,7 +50,7 @@ suppressMessages({library(data.table); library(SampleAnnotationLikelihood)})
 
 args <- commandArgs(trailingOnly = TRUE)
 opt <- list(scenarios_file = "simulations/results/gtex_scenarios.rds",
-            expr = "/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/GTEx_v11_VST.rds",
+            expr = "/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/GTEX/data/GTEx_v11_VST.rds",
             out = "simulations/results", n_features = "2000",
             task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
             subset = "", scenarios = "", cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",

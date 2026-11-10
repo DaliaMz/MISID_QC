@@ -1,6 +1,3 @@
-custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
-.libPaths(c(custom_lib, .libPaths()))
-
 # One PDF organised by the questions the simulations are meant to answer
 # (see simulations/README.md), plus the key numbers printed to the console.
 #

@@ -1,6 +1,3 @@
-custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
-.libPaths(c(custom_lib, .libPaths()))
-
 # Subsampled GTEx datasets across a grid of scenarios, for running
 # check_annotations() against known mis-identifications.
 #
@@ -28,8 +25,8 @@ custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
 suppressMessages(library(data.table))
 
 if (!exists("expr_vst") || !exists("sample_info")) {
-  ddir <- "/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/"
-  sample_info <- fread(paste0(ddir, "data/GTEx_Analysis_v11_Annotations_SampleAttributesDS.txt"))
+  ddir <- "/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/GTEX/data/"
+  sample_info <- fread(paste0(ddir, "GTEx_Analysis_v11_Annotations_SampleAttributesDS.txt"))
   expr_vst <- readRDS(paste0(ddir, "GTEx_v11_VST.rds"))
 }
 if (!exists("min_tissue_samples")) min_tissue_samples <- 200  # tissues eligible for sets

@@ -4,11 +4,11 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --time=24:00:00
-#SBATCH --output=/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/logs/gtex_misid_%A_%a.out
-#SBATCH --error=/scratch/project_mnt/S0138/DMizikovsky/misid/GTEX/logs/gtex_misid_%A_%a.err
+#SBATCH --output=/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/gtex_misid_%A_%a.out
+#SBATCH --error=/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/gtex_misid_%A_%a.err
 
 # Submit with:  sbatch simulations/run_gtex.sh
-# (the logs directory above must already exist, or the job fails silently)
+# (simulations/logs must already exist, or the job fails silently)
 # Afterwards:   Rscript simulations/Aggregate_gtex_results.R
 #
 # 150 scenarios (random tissue sets only, mislabel rates 0 to 0.4) split over
@@ -25,7 +25,7 @@
 set -euo pipefail
 module load r/4.5.1
 
-cd /scratch/project_mnt/S0138/DMizikovsky/misid/MISID_QC   # repo root on the cluster; the scripts use paths relative to it
+cd /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC   # repo root on the cluster; the scripts use paths relative to it
 export N_TASKS=30
 # One thread per task: the parallelism is the array.
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
