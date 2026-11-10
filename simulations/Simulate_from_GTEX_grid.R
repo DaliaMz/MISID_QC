@@ -34,6 +34,18 @@ if (!exists("expr_vst") || !exists("sample_info")) {
 }
 if (!exists("min_tissue_samples")) min_tissue_samples <- 200  # tissues eligible for sets
 if (!exists("n_features")) n_features <- 2000                  # most variable genes per dataset
+if (!exists("n_unknown_individuals")) n_unknown_individuals <- 1L
+if (!exists("unknown_samples_per_individual")) unknown_samples_per_individual <- 2L
+if (length(n_unknown_individuals) != 1L || !is.numeric(n_unknown_individuals) ||
+    !is.finite(n_unknown_individuals) || n_unknown_individuals < 0 ||
+    n_unknown_individuals != floor(n_unknown_individuals) ||
+    length(unknown_samples_per_individual) != 1L ||
+    !is.numeric(unknown_samples_per_individual) ||
+    !is.finite(unknown_samples_per_individual) ||
+    unknown_samples_per_individual < 1 ||
+    unknown_samples_per_individual != floor(unknown_samples_per_individual)) {
+  stop("n_unknown_individuals must be a non-negative integer and unknown_samples_per_individual must be a positive integer.")
+}
 
 meta_all <- data.table(sample = colnames(expr_vst))
 meta_all[, ID := sub("^([^-]+-[^-]+).*", "\\1", sample)]
@@ -141,8 +153,29 @@ build_scenario <- function(g) {
   if (is.null(d) || uniqueN(d$label_true) < 3L) return(NULL)
   mi <- introduce_misid(d$label_true, g$misid_rate)
   if (is.null(mi)) return(NULL)
-  d[, `:=`(label_observed = mi$label, is_misid = mi$is_misid)]
-  d[, .(sample, ID, SMTS, SMTSD, label_true, label_observed, is_misid)]
+  d[, `:=`(label_observed = mi$label, is_misid = mi$is_misid,
+           is_unknown = FALSE)]
+  if (g$task == "individual" && n_unknown_individuals > 0L) {
+    enrolled <- unique(d$label_true)
+    tissues <- strsplit(d$tissues[1L], "|", fixed = TRUE)[[1L]]
+    pool <- meta_all[SMTSD %in% tissues & !ID %in% enrolled]
+    eligible <- pool[, .N, by = ID][N >= unknown_samples_per_individual, ID]
+    if (length(eligible) < n_unknown_individuals) {
+      stop("Scenario ", g$scenario, ": not enough eligible unknown donors (need ",
+           n_unknown_individuals, ", found ", length(eligible), ").")
+    }
+    chosen <- eligible[sample.int(length(eligible), n_unknown_individuals)]
+    strangers <- pool[ID %in% chosen][
+      , .SD[sample.int(.N, unknown_samples_per_individual)], by = ID]
+    strangers[, `:=`(
+      label_true = ID,
+      label_observed = enrolled[sample.int(length(enrolled), .N, replace = TRUE)],
+      is_misid = TRUE, is_unknown = TRUE
+    )]
+    d <- rbindlist(list(d, strangers), use.names = TRUE, fill = TRUE)
+  }
+  d[, .(sample, ID, SMTS, SMTSD, label_true, label_observed, is_misid,
+        is_unknown)]
 }
 
 # Samples x features matrix (most variable genes within the dataset).
@@ -194,7 +227,12 @@ simulate_gtex_grid <- function(grid) {
   res <- lapply(seq_len(nrow(grid)), function(i) {
     m <- build_scenario(grid[i])
     if (is.null(m)) return(NULL)
-    list(meta = m, params = grid[i])
+    params <- copy(grid[i])
+    params[, `:=`(
+      n_unknown_individuals = uniqueN(m[is_unknown == TRUE, label_true]),
+      unknown_samples_per_individual = unknown_samples_per_individual
+    )]
+    list(meta = m, params = params)
   })
   names(res) <- grid$scenario
   res[!vapply(res, is.null, logical(1))]

@@ -238,7 +238,7 @@
   )
 }
 
-# Top margins of simulated strangers. For each held-out individual only up to
+# Top margins and nearest-class distances of simulated strangers. For each held-out individual only up to
 # `n_strays` of their samples (never all of them) stay in the data, relabelled
 # as random other enrolled individuals, as a stranger's samples would be in a
 # real cohort; their remaining samples are dropped. Each stray is scored by a
@@ -252,7 +252,8 @@
     if (isTRUE(progress)) {
       message("Skipping held-out-individual validation: at least three individuals are needed.")
     }
-    return(list(n = 0L, top_margin = numeric(), status = "insufficient_evidence"))
+    return(list(n = 0L, top_margin = numeric(), distance = numeric(),
+                status = "insufficient_evidence"))
   }
   n_groups <- if (is.null(n_folds)) {
     length(classes)
@@ -270,6 +271,7 @@
                     n_groups, length(classes)))
   }
   unknown_margin <- numeric()
+  unknown_distance <- numeric()
   progress_interval <- max(1L, ceiling(n_groups / 10L))
   for (g in seq_len(n_groups)) {
     members <- classes[group == g]
@@ -298,6 +300,10 @@
         unknown_margin <- c(
           unknown_margin, .score_margins(scores, y[scored])$top_margin
         )
+        unknown_distance <- c(
+          unknown_distance,
+          .nearest_class_distance(model, x[scored, , drop = FALSE])
+        )
       }
     }
     if (isTRUE(progress) &&
@@ -307,6 +313,7 @@
     }
   }
   list(n = length(unknown_margin), top_margin = unknown_margin,
+       distance = unknown_distance,
        status = if (length(unknown_margin)) "estimated" else
          "insufficient_evidence")
 }
@@ -327,6 +334,7 @@
   classes <- sort(unique(y))
   scores <- matrix(NA_real_, nrow(x), length(classes),
                    dimnames = list(rownames(x), classes))
+  distance <- rep(NA_real_, nrow(x))
   if (is.null(n_folds)) {
     fold_id <- seq_len(nrow(x))
   } else {
@@ -350,7 +358,9 @@
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                                shrinkage = shrinkage)
     scores[test, ] <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
+    distance[test] <- .nearest_class_distance(model, x[test, , drop = FALSE])
   }
+  attr(scores, "nearest_distance") <- distance
   scores
 }
 

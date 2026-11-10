@@ -28,7 +28,8 @@ mismatch_rate <- 0.1
 mismatch_repeats <- 3L
 min_accuracy <- 0.9
 detect_unknown <- TRUE
-unknown_mad <- 3
+unknown_threshold_method <- "simulated"  # or "mad"
+unknown_mad <- 3          # only used with "mad"
 grouped_unknown_validation <- FALSE
 unknown_stray_samples <- 2L
 stop_on_low_agreement <- TRUE
@@ -59,6 +60,7 @@ oof_scores <- matrix(
   NA_real_, nrow = nrow(x), ncol = length(class_counts),
   dimnames = list(rownames(x), names(class_counts))
 )
+nearest_distance <- rep(NA_real_, nrow(x))
 n_folds <- if (is.null(cv_folds)) nrow(x) else as.integer(cv_folds)
 fold_id <- if (is.null(cv_folds)) {
   seq_len(nrow(x))
@@ -78,6 +80,9 @@ for (fold in seq_len(n_folds)) {
   model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                              shrinkage = shrinkage)
   oof_scores[test, ] <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
+  nearest_distance[test] <- .nearest_class_distance(
+    model, x[test, , drop = FALSE]
+  )
   if (progress && (fold %% max(1L, ceiling(n_folds / 10L)) == 0L ||
                    fold == n_folds)) {
     message(sprintf("Fold %d/%d", fold, n_folds))
@@ -143,6 +148,7 @@ if (refit_clean && any(confidently_misassigned) && !low_agreement) {
     x, y, confidently_misassigned, if (is.null(cv_folds)) NULL else n_folds,
     shrinkage, progress = progress
   )
+  nearest_distance <- attr(oof_scores, "nearest_distance")
   class_index <- match(y, colnames(oof_scores))
   margins <- .score_margins(oof_scores, y)
   predicted_id <- margins$predicted
@@ -255,13 +261,27 @@ abstention_curve <- data.frame(
     mean(known$correct[known$margin >= cutoff])
   }, numeric(1))
 )
-unknown_threshold <- if (detect_unknown) {
+unknown_threshold <- if (!detect_unknown) {
+  -Inf
+} else if (unknown_threshold_method == "mad") {
   .unknown_margin_threshold(top_margin[reference], unknown_mad)
 } else {
-  -Inf
+  .select_threshold(nearest_distance[reference], unknown$distance,
+                    target_specificity, "upper")
 }
-low_margin <- top_margin < max(abstain_threshold, unknown_threshold)
-unknown_flag <- top_margin < unknown_threshold
+# "mad" flags a low top margin; "simulated" flags a large distance to the
+# nearest enrolled individual.
+use_distance <- detect_unknown && unknown_threshold_method == "simulated"
+unknown_statistic <- if (use_distance) nearest_distance else top_margin
+stranger_statistic <- if (use_distance) unknown$distance else
+  unknown$top_margin
+is_unknown <- function(statistic) {
+  if (!detect_unknown) rep(FALSE, length(statistic))
+  else if (use_distance) statistic > unknown_threshold
+  else statistic < unknown_threshold
+}
+unknown_flag <- is_unknown(unknown_statistic)
+low_margin <- top_margin < abstain_threshold | unknown_flag
 confident_prediction <- !low_margin
 abstain_reason_counts <- c(
   ambiguous_margin = sum(low_margin & !unknown_flag),
@@ -270,8 +290,9 @@ abstain_reason_counts <- c(
 unknown_metrics <- if (unknown$n) {
   .binary_metrics(
     c(rep(FALSE, sum(reference)), rep(TRUE, unknown$n)),
-    c(unknown_flag[reference], unknown$top_margin < unknown_threshold),
-    -c(top_margin[reference], unknown$top_margin)
+    c(unknown_flag[reference], is_unknown(stranger_statistic)),
+    (if (use_distance) 1 else -1) *
+      c(unknown_statistic[reference], stranger_statistic)
   )
 }
 cat(sprintf("abstain < %.4g, unknown < %.4g\n", abstain_threshold,
@@ -327,7 +348,10 @@ recovery_misannotated <- if (swap_simulation) {
 }
 correction_validation <- if (!is.null(simulation)) {
   proposed <- simulation$annotation_margin > margin_threshold &
-    simulation$top_margin >= max(abstain_threshold, unknown_threshold) &
+    simulation$top_margin >= max(
+      abstain_threshold,
+      if (use_distance || !detect_unknown) -Inf else unknown_threshold
+    ) &
     !simulation$agreement_simulated
   swapped <- simulation$actually_misannotated
   list(
@@ -557,7 +581,9 @@ result <- list(
   feasibility = feasibility,
   thresholds = list(
     annotation_margin = margin_threshold,
-    unknown_margin = unknown_threshold,
+    unknown_margin = if (use_distance || !detect_unknown) -Inf else
+      unknown_threshold,
+    unknown_distance = if (use_distance) unknown_threshold else Inf,
     abstain_margin = abstain_threshold,
     target_specificity = target_specificity
   )

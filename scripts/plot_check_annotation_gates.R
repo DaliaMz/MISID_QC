@@ -155,25 +155,30 @@ plot_check_annotation_gates <- function(result, file = NULL) {
 
   unknown <- diagnostics$unknown
   graphics::par(mfrow = c(1, 1))
-  known <- unknown$known_margins[is.finite(unknown$known_margins)]
-  strangers <- unknown$simulated_unknown_margins[
-    is.finite(unknown$simulated_unknown_margins)
+  known <- unknown$known_values[is.finite(unknown$known_values)]
+  strangers <- unknown$simulated_unknown_values[
+    is.finite(unknown$simulated_unknown_values)
   ]
+  unknown_label <- if (identical(unknown$statistic, "nearest_class_distance")) {
+    "Distance to nearest enrolled individual"
+  } else {
+    "Top score - second score"
+  }
   if (length(known) || length(strangers)) {
     all_margins <- c(known, strangers)
     breaks <- graphics::hist(all_margins, plot = FALSE, breaks = 35L)$breaks
     if (length(known)) {
       graphics::hist(
         known, breaks = breaks, col = grDevices::adjustcolor("steelblue", 0.5),
-        border = "white", xlab = "Top score - second score",
-        main = "Gate 4: unknown-individual margin"
+        border = "white", xlab = unknown_label,
+        main = "Gate 4: unknown-individual statistic"
       )
     } else {
       graphics::hist(
         strangers, breaks = breaks,
         col = grDevices::adjustcolor("darkorange", 0.5),
-        border = "white", xlab = "Top score - second score",
-        main = "Gate 4: unknown-individual margin"
+        border = "white", xlab = unknown_label,
+        main = "Gate 4: unknown-individual statistic"
       )
       strangers <- numeric()
     }

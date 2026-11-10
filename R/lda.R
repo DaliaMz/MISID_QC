@@ -46,6 +46,7 @@ fit_shrinkage_lda <- function(x, y, shrinkage = 0.1, priors = NULL) {
   coefficients_transposed <- sweep(
     t(means), 1L, covariance_diagonal, FUN = "/"
   )
+  middle <- NULL
   if (shrinkage < 1) {
     weighted_residuals <- sweep(
       residuals, 2L, covariance_diagonal, FUN = "/"
@@ -85,6 +86,8 @@ fit_shrinkage_lda <- function(x, y, shrinkage = 0.1, priors = NULL) {
       classes = classes,
       means = means,
       covariance_diagonal = covariance_diagonal,
+      residuals = residuals,
+      middle = middle,
       beta = coefficients,
       intercepts = intercepts,
       priors = priors,
@@ -123,4 +126,25 @@ predict_shrinkage_lda <- function(object, newdata, ...) {
   }
   scores <- x %*% t(object$beta)
   sweep(scores, 2L, object$intercepts, FUN = "+")
+}
+
+# Distance from each row of `newdata` to the nearest class mean under the
+# model's shrinkage covariance (Mahalanobis, on the original scale). With
+# S = covariance, the squared distance to class k is
+# x' S^-1 x - 2 (score_k - log prior_k), and x' S^-1 x follows from the same
+# Woodbury identity used when fitting, so S is never formed.
+.nearest_class_distance <- function(model, newdata) {
+  x <- as.matrix(newdata)
+  if (!is.null(model$feature_names) && !is.null(colnames(x))) {
+    x <- x[, model$feature_names, drop = FALSE]
+  }
+  scores <- predict_shrinkage_lda(model, x)
+  scaled <- sweep(x, 2L, model$covariance_diagonal, FUN = "/")
+  quadratic <- rowSums(scaled * x)
+  if (!is.null(model$middle)) {
+    projected <- model$residuals %*% t(scaled)
+    quadratic <- quadratic - colSums(projected * (model$middle %*% projected))
+  }
+  best <- apply(sweep(scores, 2L, log(model$priors), FUN = "-"), 1L, max)
+  sqrt(pmax(quadratic - 2 * best, 0))
 }

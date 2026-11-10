@@ -8,6 +8,7 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   min_agreement = 0.7, margin_coverage = 0.025,
   holdout_reference = c("all_alternatives", "top"), refit_clean = TRUE,
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
+  unknown_threshold_method = c("simulated", "mad"),
   unknown_mad = 3,
   grouped_unknown_validation = FALSE,
   unknown_stray_samples = 2L, mismatch_repeats = 3L,
@@ -80,10 +81,20 @@ off: no stranger validation is run, no sample is marked as a potential
 unknown individual, and abstention uses only the abstention cutoff.
 \code{feasibility$unknown_individual_detection} is \code{"not_assessed"}.}
 
-\item{unknown_mad}{Samples whose top margin is below
-\code{median - unknown_mad * MAD} of the log top margin of enrolled samples
-abstain and are marked as potential unknown
-individuals. No share of samples is forced to be unknown.}
+\item{unknown_threshold_method}{How the unknown-individual cutoff on the top
+statistic is chosen. \code{"simulated"} (default) uses the Mahalanobis
+distance (under the shrinkage covariance) from a sample to its nearest
+enrolled individual's mean, with the cutoff chosen so at most
+\code{1 - target_specificity} of enrolled reference samples exceed it while
+catching the most simulated strangers; with no simulated strangers it is the
+\code{target_specificity} quantile of the enrolled distances. \code{"mad"}
+restores the earlier rule, a cutoff on the top-versus-second margin of
+\code{median - unknown_mad * MAD} of the log top margin of enrolled samples,
+which uses no simulated strangers. Samples beyond the cutoff abstain and are
+marked as potential unknown individuals. No share
+of samples is forced to be unknown.}
+\item{unknown_mad}{Multiplier used only when
+\code{unknown_threshold_method = "mad"}.}
 \item{unknown_stray_samples}{Unknown-individual validation pretends each enrolled
 individual is a stranger. Up to this many of their samples (never all of them)
 are kept in the data relabelled as random other individuals, as a stranger's
@@ -93,7 +104,7 @@ is scored by a model that never saw it, giving a margin for an unknown person.}
 for each individual separately. If \code{TRUE} and \code{cv_folds} is set, individuals are
 processed in \code{cv_folds} groups instead, so far fewer models are fit, at the cost
 of slightly optimistic (too large) unknown margins. It only affects the
-reported unknown sensitivity and feasibility, not the unknown cutoff.}
+reported unknown sensitivity and feasibility. With the default \code{unknown_threshold_method = "simulated"} it also affects the unknown cutoff.}
 }
 \value{
 A list with sample-level \code{predictions}, raw \code{identity_scores},

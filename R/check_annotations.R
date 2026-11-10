@@ -80,9 +80,20 @@
 #'   off: no stranger validation is run, no sample is marked as a potential
 #'   unknown individual, and abstention uses only the abstention cutoff.
 #'   `feasibility$unknown_individual_detection` is `"not_assessed"`.
-#' @param unknown_mad Samples whose top margin is below
-#'   `median - unknown_mad * MAD` of the log top margin of enrolled samples
-#'   abstain and are marked as potential unknown individuals. No share of samples is forced to be unknown.
+#' @param unknown_threshold_method How the unknown-individual cutoff on the top
+#'   statistic is chosen. `"simulated"` (default) uses the Mahalanobis
+#'   distance (under the shrinkage covariance) from a sample to its nearest
+#'   enrolled individual's mean, with the cutoff chosen so at most
+#'   `1 - target_specificity` of enrolled reference samples exceed it while
+#'   catching the most simulated strangers; with no simulated strangers it is
+#'   the `target_specificity` quantile of the enrolled distances. `"mad"`
+#'   restores the earlier rule, a cutoff on the top-versus-second margin of
+#'   `median - unknown_mad * MAD` of the log top margin of enrolled samples,
+#'   which uses no simulated strangers. Samples beyond the cutoff abstain and
+#'   are marked as potential unknown individuals.
+#'   No share of samples is forced to be unknown.
+#' @param unknown_mad Multiplier used only when
+#'   `unknown_threshold_method = "mad"`.
 #' @param unknown_stray_samples Unknown-individual validation pretends each
 #'   enrolled individual is a stranger. Up to this many of their samples (never
 #'   all of them) are kept in the data relabelled as random other individuals,
@@ -93,8 +104,9 @@
 #'   repeated for each individual separately. If `TRUE`
 #'   and `cv_folds` is set, individuals are removed in `cv_folds` groups
 #'   instead, so far fewer models are fit, at the cost of slightly optimistic
-#'   (too large) unknown margins. It only affects the reported unknown
-#'   sensitivity and feasibility, not the unknown cutoff.
+#'   (too large) unknown margins. With the default
+#'   `unknown_threshold_method = "simulated"` it also affects the unknown
+#'   cutoff.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
 #'   `performance`, `calibration`, `risk_coverage` (see
 #'   [plot_risk_coverage()]), `mismatch_simulation`, `held_out` (count, fraction and IDs of samples held out as
@@ -121,11 +133,13 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               holdout_reference = c("all_alternatives", "top"),
                               refit_clean = TRUE, mismatch_rate = 0.1,
                               min_accuracy = 0.9, detect_unknown = TRUE,
+                              unknown_threshold_method = c("simulated", "mad"),
                               unknown_mad = 3,
                               grouped_unknown_validation = FALSE,
                               unknown_stray_samples = 2L,
                               mismatch_repeats = 3L, stop_on_low_agreement = TRUE,
                               diagnostics = FALSE) {
+  unknown_threshold_method <- match.arg(unknown_threshold_method)
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -198,6 +212,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     NA_real_, nrow = nrow(x), ncol = length(class_counts),
     dimnames = list(rownames(x), names(class_counts))
   )
+  nearest_distance <- rep(NA_real_, nrow(x))
   n_folds <- if (is.null(cv_folds)) nrow(x) else as.integer(cv_folds)
   fold_id <- if (is.null(cv_folds)) {
     seq_len(nrow(x))
@@ -227,6 +242,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                                shrinkage = shrinkage)
     oof_scores[test, ] <- predict_shrinkage_lda(
+      model, x[test, , drop = FALSE]
+    )
+    nearest_distance[test] <- .nearest_class_distance(
       model, x[test, , drop = FALSE]
     )
     if (isTRUE(progress) &&
@@ -340,6 +358,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       x, y, confidently_misassigned, if (is.null(cv_folds)) NULL else n_folds,
       shrinkage, progress = progress
     )
+    nearest_distance <- attr(oof_scores, "nearest_distance")
     class_index <- match(y, colnames(oof_scores))
     margins <- .score_margins(oof_scores, y)
     predicted_id <- margins$predicted
@@ -434,8 +453,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # between enrolled individuals). The cutoff is the lowest margin at which
   # agreement among retained samples reaches min_accuracy, with simulated
   # true-label agreement preferred because observed labels may be wrong. The
-  # unknown cutoff is a robust lower bound on enrolled top margins; unknowns
-  # always abstain too.
+  # unknown cutoff is tuned on simulated strangers (or, with method "mad", a
+  # robust lower bound on enrolled top margins); unknowns always abstain too.
   known <- if (is.null(simulation)) {
     list(margin = top_margin[reference], correct = correct_identity[reference])
   } else {
@@ -460,13 +479,27 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       mean(known$correct[known$margin >= cutoff])
     }, numeric(1))
   )
-  unknown_threshold <- if (detect_unknown) {
+  unknown_threshold <- if (!detect_unknown) {
+    -Inf
+  } else if (unknown_threshold_method == "mad") {
     .unknown_margin_threshold(top_margin[reference], unknown_mad)
   } else {
-    -Inf
+    .select_threshold(nearest_distance[reference], unknown$distance,
+                      target_specificity, "upper")
   }
-  low_margin <- top_margin < max(abstain_threshold, unknown_threshold)
-  unknown_flag <- top_margin < unknown_threshold
+  # "mad" flags a low top margin; "simulated" flags a large distance to the
+  # nearest enrolled individual.
+  use_distance <- detect_unknown && unknown_threshold_method == "simulated"
+  unknown_statistic <- if (use_distance) nearest_distance else top_margin
+  stranger_statistic <- if (use_distance) unknown$distance else
+    unknown$top_margin
+  is_unknown <- function(statistic) {
+    if (!detect_unknown) rep(FALSE, length(statistic))
+    else if (use_distance) statistic > unknown_threshold
+    else statistic < unknown_threshold
+  }
+  unknown_flag <- is_unknown(unknown_statistic)
+  low_margin <- top_margin < abstain_threshold | unknown_flag
   confident_prediction <- !low_margin
   abstain_reason_counts <- c(
     ambiguous_margin = sum(low_margin & !unknown_flag),
@@ -475,15 +508,17 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   unknown_metrics <- if (unknown$n) {
     .binary_metrics(
       c(rep(FALSE, sum(reference)), rep(TRUE, unknown$n)),
-      c(unknown_flag[reference], unknown$top_margin < unknown_threshold),
-      -c(top_margin[reference], unknown$top_margin)
+      c(unknown_flag[reference], is_unknown(stranger_statistic)),
+      (if (use_distance) 1 else -1) *
+        c(unknown_statistic[reference], stranger_statistic)
     )
   }
   if (isTRUE(progress)) {
     message(sprintf(
-      "Abstaining on %d of %d samples (margin < %.3g; %d potential unknown, margin < %.3g) to keep agreement >= %.0f%%.",
+      "Abstaining on %d of %d samples (margin < %.3g; %d potential unknown, %s %.3g) to keep agreement >= %.0f%%.",
       sum(!confident_prediction), length(y), abstain_threshold,
-      sum(unknown_flag), unknown_threshold, 100 * min_accuracy
+      sum(unknown_flag), if (use_distance) "distance >" else "margin <",
+      unknown_threshold, 100 * min_accuracy
     ))
   }
   # Flagging depends on the annotation margin alone: a clearly beaten observed
@@ -555,7 +590,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   correction_validation <- if (!is.null(simulation)) {
     proposed <- simulation$annotation_margin > margin_threshold &
-      simulation$top_margin >= max(abstain_threshold, unknown_threshold) &
+      simulation$top_margin >= max(
+        abstain_threshold,
+        if (use_distance || !detect_unknown) -Inf else unknown_threshold
+      ) &
       !simulation$agreement_simulated
     swapped <- simulation$actually_misannotated
     list(
@@ -706,9 +744,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         "flagging has no probability interpretation. Detection sensitivity",
         "is cross-fitted across simulated-swap repeats when at least two are",
         "available (see performance$misannotation_detection$source); the",
-        "unknown cutoff is tuned on the same simulated strangers used to",
-        "estimate unknown sensitivity, which makes that sensitivity",
-        "optimistic. Recovery and correction estimates use the final cutoffs",
+        "unknown cutoff (unless unknown_threshold_method = \"mad\") is",
+        "tuned on the same simulated strangers used to estimate unknown",
+        "sensitivity, which makes that sensitivity optimistic. Recovery and correction estimates use the final cutoffs",
         "on the same simulated swaps."
       )
     )
@@ -777,7 +815,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     feasibility = feasibility,
     thresholds = list(
       annotation_margin = margin_threshold,
-      unknown_margin = unknown_threshold,
+      unknown_margin = if (use_distance || !detect_unknown) -Inf else
+        unknown_threshold,
+      unknown_distance = if (use_distance) unknown_threshold else Inf,
       abstain_margin = abstain_threshold,
       target_specificity = target_specificity
     )
@@ -873,8 +913,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       unknown = list(
         enabled = detect_unknown,
         threshold = unknown_threshold,
-        known_margins = top_margin[reference],
-        simulated_unknown_margins = unknown$top_margin,
+        statistic = if (use_distance) "nearest_class_distance" else
+          "top_margin",
+        known_values = unknown_statistic[reference],
+        simulated_unknown_values = stranger_statistic,
         metrics = unknown_metrics
       ),
       gates = list(

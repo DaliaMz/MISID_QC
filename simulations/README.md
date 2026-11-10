@@ -25,9 +25,52 @@ installed package (excluded via `.Rbuildignore`). Install the package first
 
 Q2 and Q3 are the main questions. The simulated data give controlled factors
 (label signal, mislabel rate, replication) so you can see why something fails;
-GTEx repeats Q2, Q3 and Q6 on real expression. Not covered: structured
-(non-random) mislabels, unknown individuals (`detect_unknown` is off) and
-variation in the number of labels, features or batches in the simulated data.
+GTEx repeats Q2, Q3 and Q6 on real expression. The generators also include
+unknown individuals, but the existing benchmark runners have `detect_unknown`
+turned off and do not report unknown-detection metrics. Not covered:
+structured (non-random) mislabels or variation in the number of labels,
+features or batches in the simulated data.
+
+## Unknown individuals
+
+By default, the synthetic scenarios and the GTEx **individual** scenarios add
+one unknown individual with two samples. Their true identity has no enrolled
+samples, while each sample receives a randomly chosen enrolled observed label.
+`meta$is_unknown` identifies these samples; they also have `is_misid = TRUE`
+because their observed labels are wrong. `misid_rate` controls only the
+mislabels among enrolled samples, so a zero mislabel rate is not a completely
+clean scenario unless unknowns are disabled.
+
+GTEx unknown donors come from the same selected tissue set as the enrolled
+donors. Tissue-label scenarios do not add unknown donors: a donor is not an
+unknown tissue. Both generators record the number of unknown individuals and
+samples per unknown in scenario parameters. To change the defaults when
+sourcing either generator, set `n_unknown_individuals` and
+`unknown_samples_per_individual` first; set `n_unknown_individuals <- 0L` for
+the original no-unknown design. The synthetic generator also accepts these
+arguments in `simulate_dataset()`. GTEx stops with an error if too few eligible
+donors are available.
+
+For example, from the repository root in an R session:
+
+```r
+n_unknown_individuals <- 1L
+unknown_samples_per_individual <- 2L
+source("simulations/Simulate_full_dataset.R")
+sims <- simulate_grid(grid)
+```
+
+For GTEx, set the same variables before sourcing
+`simulations/Simulate_from_GTEX_grid.R`, then call `simulate_gtex_grid(grid)`.
+Sourcing either script does not generate or save the full grid.
+
+To inspect unknown detection, run `check_annotations(..., detect_unknown =
+TRUE)` on a generated scenario and compare `potential_unknown_individual`
+with `meta$is_unknown`, matched by sample ID. The existing benchmark runners
+disable unknown detection and score `is_misid` as one combined group, so their
+recovery metrics cannot distinguish unknowns from enrolled-label swaps.
+Regenerate the scenario files and use a new runner output directory (or
+`force=TRUE`) when changing this design.
 
 After the runs finish, `Rscript simulations/Summarize_by_question.R` writes
 `summary_by_question.pdf` (one section per summary file, one page per question)

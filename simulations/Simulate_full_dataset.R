@@ -3,7 +3,6 @@ custom_lib <- "/scratch/project/palpant_scratch/DMizikovsky/R_packages"
 
 # Simulate repeated-sample data with label-driven and competing variance, plus mis-identified labels.
 # Grid: data type x label variance share x discrete and continuous variance shares x samples/label.
-library(tidyverse)
 library(data.table)
 
 # ---- Simulation -------------------------------------------------------------
@@ -84,18 +83,51 @@ introduce_misid <- function(label, rate, min_count = 2L, max_tries = 200L) {
 
 simulate_dataset <- function(type, var_label, var_discrete, var_cont, n_per_label,
                              n_labels = 25, n_features = 300, misid_rate = 0.1,
-                             n_batches = 4, shared_time = TRUE) {
-  sim <- simulate_latent(n_labels, n_per_label, n_features,
+                             n_batches = 4, shared_time = TRUE,
+                             n_unknown_individuals = 1L,
+                             unknown_samples_per_individual = 2L) {
+  if (length(n_unknown_individuals) != 1L || !is.numeric(n_unknown_individuals) ||
+      !is.finite(n_unknown_individuals) || n_unknown_individuals < 0 ||
+      n_unknown_individuals != floor(n_unknown_individuals) ||
+      length(unknown_samples_per_individual) != 1L ||
+      !is.numeric(unknown_samples_per_individual) ||
+      !is.finite(unknown_samples_per_individual) ||
+      unknown_samples_per_individual < 1 ||
+      unknown_samples_per_individual != floor(unknown_samples_per_individual) ||
+      unknown_samples_per_individual > n_per_label) {
+    stop("n_unknown_individuals must be a non-negative integer and unknown_samples_per_individual must be an integer between 1 and n_per_label.")
+  }
+  sim <- simulate_latent(n_labels + n_unknown_individuals, n_per_label, n_features,
                          var_label, var_discrete, var_cont, n_batches,
                          shared_time = shared_time)
-  X   <- to_observed(sim$z, type)
-  mi  <- introduce_misid(sim$label, misid_rate)
-  ids <- sprintf("S%05d", seq_along(sim$label))
+  enrolled <- which(sim$label <= n_labels)
+  unknown <- if (n_unknown_individuals > 0L) {
+    unlist(lapply(seq_len(n_unknown_individuals), function(i) {
+      indices <- which(sim$label == n_labels + i)
+      indices[sample.int(length(indices), unknown_samples_per_individual)]
+    }), use.names = FALSE)
+  } else {
+    integer()
+  }
+  keep <- c(enrolled, unknown)
+  X <- to_observed(sim$z[keep, , drop = FALSE], type)
+  mi <- introduce_misid(sim$label[enrolled], misid_rate)
+  unknown_labels <- if (length(unknown)) {
+    sample.int(n_labels, length(unknown), replace = TRUE)
+  } else {
+    integer()
+  }
+  label_true <- sim$label[keep]
+  is_unknown <- label_true > n_labels
+  ids <- sprintf("S%05d", seq_along(keep))
   dimnames(X) <- list(ids, sprintf("F%04d", seq_len(n_features)))
   list(
     X = X,
-    meta = data.table(sample = ids, label_true = sim$label, label_observed = mi$label,
-                      is_misid = mi$is_misid, batch = sim$batch, time = sim$time)
+    meta = data.table(sample = ids, label_true = label_true,
+                      label_observed = c(mi$label, unknown_labels),
+                      is_misid = c(mi$is_misid, rep(TRUE, length(unknown))),
+                      is_unknown = is_unknown,
+                      batch = sim$batch[keep], time = sim$time[keep])
   )
 }
 
@@ -131,6 +163,10 @@ grid[, `:=`(var_discrete = fifelse(nuisance == "both", 0.3, 0),
 stopifnot(all(grid$var_label + grid$var_discrete + grid$var_cont <= 1))
 grid[, scenario := .I]
 grid[, seed := 1000L + scenario]
+if (!exists("n_unknown_individuals")) n_unknown_individuals <- 1L
+if (!exists("unknown_samples_per_individual")) unknown_samples_per_individual <- 2L
+grid[, `:=`(n_unknown_individuals = n_unknown_individuals,
+            unknown_samples_per_individual = unknown_samples_per_individual)]
 
 # Each scenario has its own seed, so changing the grid does not change the
 # data of the remaining scenarios.
@@ -138,7 +174,11 @@ simulate_grid <- function(grid, ...) {
   res <- lapply(seq_len(nrow(grid)), function(i) {
     g <- grid[i]
     set.seed(g$seed)
-    d <- simulate_dataset(g$type, g$var_label, g$var_discrete, g$var_cont, g$n_per_label, misid_rate = g$misid_rate, ...)
+    d <- simulate_dataset(g$type, g$var_label, g$var_discrete, g$var_cont,
+                          g$n_per_label, misid_rate = g$misid_rate,
+                          n_unknown_individuals = g$n_unknown_individuals,
+                          unknown_samples_per_individual = g$unknown_samples_per_individual,
+                          ...)
     d$params <- g
     d
   })
@@ -146,7 +186,9 @@ simulate_grid <- function(grid, ...) {
   res
 }
 
-sims <- simulate_grid(grid)
-# Run from the repo root so this lands where the runner looks for it.
-dir.create("simulations/results", recursive = TRUE, showWarnings = FALSE)
-saveRDS(sims, "simulations/results/simulated_datasets_v2.rds")
+if (sys.nframe() == 0L) {
+  sims <- simulate_grid(grid)
+  # Run from the repo root so this lands where the runner looks for it.
+  dir.create("simulations/results", recursive = TRUE, showWarnings = FALSE)
+  saveRDS(sims, "simulations/results/simulated_datasets_v2.rds")
+}
