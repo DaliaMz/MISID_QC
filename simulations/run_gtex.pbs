@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -N gtex_misid
+#PBS -J 1-30%15
+#PBS -l select=1:ncpus=1:mem=16gb
+#PBS -l walltime=24:00:00
+#PBS -o /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/gtex_misid_%J_%I.out
+#PBS -e /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/gtex_misid_%J_%I.err
+#PBS -V
+
+# Submit with: qsub simulations/run_gtex.pbs
+# simulations/logs must already exist before submission.
+# Afterwards: Rscript simulations/Aggregate_gtex_results.R
+
+set -euo pipefail
+module load r/4.5.1
+
+cd /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC
+export N_TASKS=30
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+# RUN_ARGS replaces the default entirely, e.g. qsub -v RUN_ARGS='cv_folds=loo' simulations/run_gtex.pbs
+RUN_ARGS="${RUN_ARGS:-cv_folds=5}"
+TASK_ID="${PBS_ARRAY_INDEX:-${PBS_ARRAYID:-1}}"
+
+# shellcheck disable=SC2086
+Rscript simulations/Run_across_GTEX_simulations.R \
+  task_id="${TASK_ID}" n_tasks="${N_TASKS}" ${RUN_ARGS}
