@@ -1,13 +1,24 @@
 # Combine the per-scenario rows written by Run_across_GTEX_simulations.R.
-#   Rscript simulations/Aggregate_gtex_results.R [out=simulations/results]
+#   Rscript simulations/Aggregate_gtex_results.R [out=simulations/results] [rescore_unknown=TRUE]
 suppressMessages(library(data.table))
+source("simulations/score_unknown.R")
 out <- "simulations/results"
+rescore_unknown <- FALSE
 for (a in commandArgs(trailingOnly = TRUE)) {
   if (startsWith(a, "out=")) out <- sub("^out=", "", a)
+  if (startsWith(a, "rescore_unknown=")) {
+    rescore_unknown <- as.logical(sub("^rescore_unknown=", "", a))
+    if (is.na(rescore_unknown)) stop("rescore_unknown must be TRUE or FALSE")
+  }
 }
 files <- list.files(file.path(out, "rows_gtex"), pattern = "\\.rds$", full.names = TRUE)
 if (!length(files)) stop("No rows found in ", file.path(out, "rows_gtex"))
-all <- rbindlist(lapply(files, readRDS), fill = TRUE)
+rows <- if (rescore_unknown) {
+  rescore_unknown_rows(files, file.path(out, "dirty_gtex"))
+} else {
+  lapply(files, readRDS)
+}
+all <- rbindlist(rows, fill = TRUE)
 setorder(all, scenario, cfg)
 saveRDS(all, file.path(out, "summary_gtex.rds"))
 fwrite(all, file.path(out, "summary_gtex.csv"))
@@ -29,6 +40,16 @@ if (nrow(ok)) {
                sens_gap = mean(sens_gap, na.rm = TRUE),
                verdict_ok = mean(verdict_correct, na.rm = TRUE)),
            by = .(cfg, task, set, misid_rate)][order(cfg, task, set, misid_rate)])
+  if (all(c("unknown_sens_true", "unknown_spec_true") %in% names(ok))) {
+    cat("\nUnknown detection by config, task and mislabel rate (assessed samples only):\n")
+    print(ok[, .(
+      runs = .N,
+      sens_runs = sum(is.finite(unknown_sens_true)),
+      sensitivity = if (any(is.finite(unknown_sens_true))) mean(unknown_sens_true, na.rm = TRUE) else NA_real_,
+      spec_runs = sum(is.finite(unknown_spec_true)),
+      specificity = if (any(is.finite(unknown_spec_true))) mean(unknown_spec_true, na.rm = TRUE) else NA_real_
+    ), by = .(cfg, task, misid_rate)][order(cfg, task, misid_rate)])
+  }
 }
 
 # ---- Diagnostic plots --------------------------------------------------------

@@ -34,6 +34,7 @@ if (!exists("n_features")) n_features <- 2000                  # most variable g
 if (!exists("n_unknown_individuals")) n_unknown_individuals <- 1L
 if (!exists("n_unknown_tissues")) n_unknown_tissues <- 1L
 if (!exists("unknown_samples_per_individual")) unknown_samples_per_individual <- 2L
+unknown_samples_per_tissue <- 2L
 if (length(n_unknown_individuals) != 1L || !is.numeric(n_unknown_individuals) ||
   !is.finite(n_unknown_individuals) || n_unknown_individuals < 0 ||
   n_unknown_individuals != floor(n_unknown_individuals) ||
@@ -168,7 +169,7 @@ build_scenario <- function(g) {
     if (g$task == "tissue") {
       eligible <- meta_all[!SMTS %in% enrolled_labels,
                            .(n_donors = uniqueN(ID)), by = SMTS][
-                             n_donors >= g$n_per_label, SMTS]
+                             n_donors >= unknown_samples_per_tissue, SMTS]
       if (length(eligible) < n_unknown) {
         stop("Scenario ", g$scenario, ": not enough eligible unknown tissues (need ",
              n_unknown, ", found ", length(eligible), ").")
@@ -176,7 +177,7 @@ build_scenario <- function(g) {
       chosen <- sample(eligible, n_unknown)
       strangers <- rbindlist(lapply(chosen, function(tissue) {
         x <- meta_all[SMTS == tissue][sample(.N)]
-        x <- x[!duplicated(ID)][seq_len(g$n_per_label)]
+        x <- x[!duplicated(ID)][seq_len(unknown_samples_per_tissue)]
         x[, label_true := tissue]
         x
       }))
@@ -281,6 +282,11 @@ simulate_gtex_grid <- function(grid) {
     params[, `:=`(
       unknown_samples_per_individual = if (task == "individual") {
         unknown_samples_per_individual
+      } else {
+        NA_integer_
+      },
+      unknown_samples_per_tissue = if (task == "tissue") {
+        unknown_samples_per_tissue
       } else {
         NA_integer_
       }

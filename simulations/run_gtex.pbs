@@ -3,16 +3,20 @@
 #PBS -t 1-30
 #PBS -l select=1:ncpus=1:mem=16gb
 #PBS -l walltime=24:00:00
-#PBS -o /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/gtex_misid_%J_%I.out
-#PBS -e /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/gtex_misid_%J_%I.err
+#PBS -o /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/
+#PBS -e /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC/simulations/logs/
 #PBS -V
 
 # Submit with: qsub simulations/run_gtex.pbs
-# simulations/logs must already exist before submission.
+# simulations/logs must exist before submission; PBS names each job/task log uniquely.
 # Afterwards: Rscript simulations/Aggregate_gtex_results.R
 
+TASK_ID="${PBS_ARRAY_INDEX:-${PBS_ARRAYID:-1}}"
+
 set -euo pipefail
-module load r/4.5.1
+export HOME=/home/projects/ssi_gen1/people/dalmiz
+source ~/miniforge3/bin/activate
+conda activate jupyter
 
 cd /home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/MISID_QC
 export N_TASKS=30
@@ -21,7 +25,6 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 # Compare detection modes with: RUN_ARGS='cv_folds=5 detect_unknown=TRUE,FALSE' qsub simulations/run_gtex.pbs
 # RUN_ARGS replaces the default entirely.
 RUN_ARGS="${RUN_ARGS:-cv_folds=5}"
-TASK_ID="${PBS_ARRAY_INDEX:-${PBS_ARRAYID:-1}}"
 
 # shellcheck disable=SC2086
 Rscript simulations/Run_across_GTEX_simulations.R \

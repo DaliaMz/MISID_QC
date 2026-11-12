@@ -18,6 +18,7 @@
 #   cores      parallel workers inside one process (default 1)
 #   task_id, n_tasks  which slice to run (defaults: SLURM_ARRAY_TASK_ID, 1 of 1)
 #   combine    TRUE to only combine the finished row files into the summary
+#   rescore_unknown TRUE with combine=TRUE to score saved dirty results again
 #   subset     data.table expression on the scenario parameters, e.g. "rep == 1"
 #   scenarios  R expression for scenario numbers, e.g. 1:20
 #   cv_folds, mismatch_repeats, target_specificity, margin_coverage,
@@ -42,6 +43,7 @@
 # them, or a new out= directory after changing the package), so an interrupted
 # run can be resumed.
 suppressMessages({library(data.table); library(SampleAnnotationLikelihood)})
+source("simulations/score_unknown.R")
 
 # ---- Settings -----------------------------------------------------------------
 
@@ -49,7 +51,7 @@ args <- commandArgs(trailingOnly = TRUE)
 opt <- list(input = "simulations/results/simulated_datasets_v2.rds",
             out = "simulations/results", cores = "1", subset = "", scenarios = "",
             task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
-            combine = "FALSE",
+            combine = "FALSE", rescore_unknown = "FALSE",
             cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
             margin_coverage = "0.025", refit_clean = "TRUE",
             holdout_reference = "all_alternatives",
@@ -102,7 +104,7 @@ all_statuses <- c("insufficient_evidence", "potential_unknown_individual",
                   "suspicious_without_reliable_alternative", "no_confident_prediction",
                   "weak_disagreement", "no_evidence_of_incorrect_annotation")
 
-score_scenario <- function(r, meta, seconds) {
+score_scenario <- function(r, meta, seconds, detect_unknown) {
   p <- r$predictions
   m <- match(p$sample_id, meta$sample)
   bad <- meta$is_misid[m]
@@ -190,7 +192,8 @@ score_scenario <- function(r, meta, seconds) {
     exclusion_threshold = r$calibration$exclusion_margin_threshold,
     seconds = seconds
   )
-  cbind(out, as.data.table(as.list(setNames(as.integer(st), paste0("n_", names(st))))))
+  cbind(out, as.data.table(score_unknown(p, meta, detect_unknown)),
+        as.data.table(as.list(setNames(as.integer(st), paste0("n_", names(st))))))
 }
 
 run_config <- function(sim, id, cfg, meta, X, md) {
@@ -220,7 +223,7 @@ run_config <- function(sim, id, cfg, meta, X, md) {
     saveRDS(list(error = conditionMessage(r), truth = sim$meta, params = sim$params), f)
     return(data.table(status = "error", error = conditionMessage(r), seconds = seconds))
   }
-  res <- score_scenario(r, meta, seconds)
+  res <- score_scenario(r, meta, seconds, cfg$detect_unknown)
   res[, warnings := paste(unique(warn), collapse = " | ")]
   saveRDS(list(result = r, truth = sim$meta, params = sim$params, config = cfg,
                check_args = check_args, cv_folds = folds), f)
@@ -256,7 +259,12 @@ combine_rows <- function() {
     cat("No finished rows in", rows_dir, "\n")
     return(invisible())
   }
-  new <- rbindlist(lapply(files, readRDS), fill = TRUE)
+  rows <- if (as.logical(opt$rescore_unknown)) {
+    rescore_unknown_rows(files, dirty_dir)
+  } else {
+    lapply(files, readRDS)
+  }
+  new <- rbindlist(rows, fill = TRUE)
   setorder(new, scenario, cfg)
   summary_file <- file.path(opt$out, "summary_v2.rds")
   saveRDS(new, summary_file)

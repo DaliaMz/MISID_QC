@@ -46,6 +46,7 @@
 # task resumes where it stopped. Each scenario is seeded, so a result does not
 # depend on how the scenarios are split across tasks.
 suppressMessages({library(data.table); library(SampleAnnotationLikelihood)})
+source("simulations/score_unknown.R")
 
 # ---- Settings -----------------------------------------------------------------
 
@@ -105,7 +106,7 @@ all_statuses <- c("insufficient_evidence", "potential_unknown_individual",
                   "suspicious_without_reliable_alternative", "no_confident_prediction",
                   "weak_disagreement", "no_evidence_of_incorrect_annotation")
 
-score_scenario <- function(r, meta, seconds) {
+score_scenario <- function(r, meta, seconds, detect_unknown) {
   p <- r$predictions
   m <- match(p$sample_id, meta$sample)
   bad <- meta$is_misid[m]
@@ -192,7 +193,8 @@ score_scenario <- function(r, meta, seconds) {
     exclusion_threshold = r$calibration$exclusion_margin_threshold,
     seconds = seconds
   )
-  cbind(out, as.data.table(as.list(setNames(as.integer(st), paste0("n_", names(st))))))
+  cbind(out, as.data.table(score_unknown(p, meta, detect_unknown)),
+        as.data.table(as.list(setNames(as.integer(st), paste0("n_", names(st))))))
 }
 
 # ---- Running one scenario -----------------------------------------------------
@@ -231,7 +233,7 @@ run_config <- function(sim, id, cfg, meta, X, md) {
     saveRDS(list(error = conditionMessage(r), truth = sim$meta, params = sim$params), f)
     return(data.table(status = "error", error = conditionMessage(r), seconds = seconds))
   }
-  res <- score_scenario(r, meta, seconds)
+  res <- score_scenario(r, meta, seconds, cfg$detect_unknown)
   res[, warnings := paste(unique(warn), collapse = " | ")]
   saveRDS(list(result = r, truth = sim$meta, params = sim$params, config = cfg,
                check_args = check_args, cv_folds = folds), f)

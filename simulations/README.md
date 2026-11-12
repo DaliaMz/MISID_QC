@@ -26,8 +26,8 @@ installed package (excluded via `.Rbuildignore`). Install the package first
 Q2 and Q3 are the main questions. The simulated data give controlled factors
 (label signal, mislabel rate, replication) so you can see why something fails;
 GTEx repeats Q2, Q3 and Q6 on real expression. The generators also include
-unknown individuals, but the existing benchmark runners have `detect_unknown`
-turned off and do not report unknown-detection metrics. Not covered:
+unknown individuals; the benchmark runners default to `detect_unknown=FALSE`.
+Not covered:
 structured (non-random) mislabels or variation in the number of labels,
 features or batches in the simulated data.
 
@@ -36,7 +36,8 @@ features or batches in the simulated data.
 By default, the synthetic scenarios and GTEx **individual** scenarios add one
 unknown individual with two samples. GTEx **tissue** scenarios add one unknown
 tissue class, sampled from an `SMTS` tissue absent from that scenario's enrolled
-labels. Unknown samples receive an observed label from an enrolled class and
+labels, with two samples from distinct donors per unknown tissue. Unknown samples
+receive an observed label from an enrolled class and
 have `is_unknown = TRUE` and `is_misid = TRUE`. Each base GTEx scenario also has
 a paired version with no unknowns. `misid_rate` controls only the mislabels
 among enrolled samples, so a zero mislabel rate is not a completely clean
@@ -64,11 +65,27 @@ For GTEx, set the same variables before sourcing
 `simulations/Simulate_from_GTEX_grid.R`, then call `simulate_gtex_grid(grid)`.
 Sourcing either script does not generate or save the full grid.
 
-To inspect unknown detection, run `check_annotations(..., detect_unknown =
-TRUE)` on a generated scenario and compare `potential_unknown_individual`
-with `meta$is_unknown`, matched by sample ID. The existing benchmark runners
-disable unknown detection and score `is_misid` as one combined group, so their
-recovery metrics cannot distinguish unknowns from enrolled-label swaps.
+With `detect_unknown=TRUE`, both runners report `unknown_sens_true` and
+`unknown_spec_true`, comparing `potential_unknown_individual` against
+`is_unknown`. Sensitivity is the fraction of assessed unknown samples flagged;
+specificity is the fraction of assessed enrolled samples not flagged, including
+those with swapped labels. Samples with missing flags are excluded. The
+`unknown_n_true`, `unknown_n_known`, `unknown_n_assessed_true` and
+`unknown_n_assessed_known` columns show the total and assessed counts; an
+absent class or disabled detection gives `NA` for the corresponding rate.
+The existing misannotation and recovery metrics still group unknowns together
+with enrolled-label swaps.
+
+Existing saved results can be scored without refitting:
+
+```sh
+Rscript simulations/Run_across_simulated_data.R combine=TRUE rescore_unknown=TRUE
+Rscript simulations/Aggregate_gtex_results.R rescore_unknown=TRUE
+```
+
+Add `out=...` for a non-default output directory. Rescoring reads each matching
+file in `dirty` or `dirty_gtex` and updates the combined summary, not the
+individual row files; it requires saved truth, flags and detection settings.
 Regenerate the scenario files and use a new runner output directory (or
 `force=TRUE`) when changing this design.
 

@@ -107,13 +107,16 @@ tissue[, `:=`(task = "tissue", n_labels = 3L, n_per_label = 4,
 tissue_meta <- gtex$build_scenario(tissue)
 tissue_unknown <- tissue_meta[is_unknown == TRUE]
 tissue_known <- tissue_meta[is_unknown == FALSE]
-stopifnot(nrow(tissue_unknown) == 4L,
+stopifnot(nrow(tissue_unknown) == 2L,
       uniqueN(tissue_unknown$label_true) == 1L,
       !any(tissue_unknown$label_true %in% tissue_known$label_true),
       all(tissue_unknown$is_misid),
       all(tissue_unknown$label_observed %in% tissue_known$label_true),
       !any(tissue_unknown$label_true %in% tissue_meta$label_observed),
-      uniqueN(tissue_unknown$ID) == 4L)
+      uniqueN(tissue_unknown$ID) == 2L)
+tissue_saved <- gtex$simulate_gtex_grid(tissue)[[1L]]
+stopifnot(tissue_saved$params$unknown_samples_per_tissue == 2L,
+          sum(tissue_saved$meta$is_unknown) == 2L)
 tissue[, n_unknown_tissues := 0L]
 stopifnot(!any(gtex$build_scenario(tissue)$is_unknown))
 gtex$n_unknown_tissues <- 100L
@@ -132,4 +135,36 @@ stopifnot(setequal(gtex_grid_counts$task, c("individual", "tissue")),
       setequal(gtex_grid_counts[task == "tissue", n_unknown_tissues],
            c(0L, 1L)),
           !anyDuplicated(gtex$grid$scenario))
+
+source("simulations/score_unknown.R")
+truth <- data.frame(sample = letters[1:6],
+                    is_unknown = c(TRUE, TRUE, TRUE, FALSE, FALSE, FALSE))
+predictions <- data.frame(sample_id = letters[c(6, 1, 4, 2, 5)],
+                          potential_unknown_individual = c(FALSE, TRUE, TRUE, FALSE, NA))
+scored <- score_unknown(predictions, truth, TRUE)
+stopifnot(scored$unknown_n_true == 3, scored$unknown_n_known == 3,
+          scored$unknown_n_assessed_true == 2, scored$unknown_n_assessed_known == 2,
+          scored$unknown_sens_true == 0.5, scored$unknown_spec_true == 0.5)
+disabled <- score_unknown(predictions, truth, FALSE)
+stopifnot(is.na(disabled$unknown_sens_true), is.na(disabled$unknown_spec_true),
+          disabled$unknown_n_assessed_true == 0, disabled$unknown_n_assessed_known == 0)
+no_unknown <- score_unknown(predictions, transform(truth, is_unknown = FALSE), TRUE)
+stopifnot(is.na(no_unknown$unknown_sens_true), no_unknown$unknown_spec_true == 0.5)
+stopifnot(inherits(try(score_unknown(predictions, truth[, "sample", drop = FALSE], TRUE),
+                       silent = TRUE), "try-error"))
+
+tmp <- tempfile("unknown-rescore-")
+dir.create(tmp)
+dir.create(file.path(tmp, "dirty"))
+row_file <- file.path(tmp, "scenario_1__cfg.rds")
+saveRDS(data.table(status = "ok"), row_file)
+saveRDS(list(result = list(predictions = predictions), truth = truth,
+             check_args = list(detect_unknown = TRUE)),
+        file.path(tmp, "dirty", basename(row_file)))
+rescored <- rescore_unknown_rows(row_file, file.path(tmp, "dirty"))[[1L]]
+stopifnot(rescored$unknown_sens_true == 0.5, rescored$unknown_spec_true == 0.5)
+unlink(file.path(tmp, "dirty", basename(row_file)))
+unlink(file.path(tmp, "dirty"))
+unlink(row_file)
+unlink(tmp)
 cat("Unknown simulation tests passed.\n")
