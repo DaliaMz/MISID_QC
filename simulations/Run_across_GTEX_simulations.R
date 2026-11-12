@@ -19,7 +19,7 @@
 #   subset            data.table expression on the scenario parameters
 #   scenarios         R expression for scenario numbers, e.g. 1:20
 #   cv_folds, mismatch_repeats, margin_coverage, holdout_reference,
-#   target_specificity, refit_clean, detect_unknown
+#   target_specificity, detect_unknown
 #                     comma-separated values to compare; every combination is
 #                     run, e.g.  cv_folds=5,loo mismatch_repeats=1,3
 #                     margin_coverage=0.01,0.025,0.05
@@ -56,12 +56,13 @@ opt <- list(scenarios_file = "simulations/results/gtex_scenarios.rds",
             out = "simulations/results", n_features = "2000",
             task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
             subset = "", scenarios = "", cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
-            margin_coverage = "0.025", refit_clean = "TRUE",
+            margin_coverage = "0.025",
             holdout_reference = "all_alternatives",
             detect_unknown = "FALSE",
             min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
+  if (kv[1] == "refit_clean") stop("refit_clean has been removed; models are not refit.")
   opt[[kv[1]]] <- paste(kv[-1], collapse = "=")
 }
 # min_agreement = 0 disables the agreement gate so every scenario is fully
@@ -76,15 +77,13 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               margin_coverage = as.numeric(as_vals(opt$margin_coverage)),
               holdout_reference = as_vals(opt$holdout_reference),
               target_specificity = as.numeric(as_vals(opt$target_specificity)),
-              refit_clean = as.logical(as_vals(opt$refit_clean)),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
               sorted = FALSE)
-# Suffixes are added only for non-default options, preserving earlier result names.
-configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s%s%s", cv_folds, mismatch_repeats,
+# The suffix distinguishes cutoff-only results from historical runs.
+configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s%s_cutoffonly", cv_folds, mismatch_repeats,
                          margin_coverage, target_specificity,
                          ifelse(holdout_reference == "all_alternatives", "",
                                 paste0("_hr", holdout_reference)),
-                            ifelse(refit_clean, "", "_norefit"),
                             ifelse(detect_unknown, "_du", ""))]
 task_id <- as.integer(opt$task_id); n_tasks <- as.integer(opt$n_tasks)
 stopifnot(task_id >= 1L, task_id <= n_tasks)
@@ -178,8 +177,7 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
       ratio(sum(p$candidate_correction[corr & bad] == truth[corr & bad]), sum(bad)),
     n_held = length(held), n_held_misid = sum(held_bad),
     held_precision = ratio(sum(held_bad), length(held)),
-    # held-out samples come from the first pass over every input sample, so the
-    # denominators are the input totals, not the post-refit predictions
+    # Held-out samples and their denominators cover all input samples.
     n_samples_input = nrow(meta), n_misid_input = sum(meta$is_misid),
     held_recall = ratio(sum(held_bad), sum(meta$is_misid)),
     n_corrections = sum(corr),
@@ -220,7 +218,6 @@ run_config <- function(sim, id, cfg, meta, X, md) {
                  mismatch_repeats = cfg$mismatch_repeats,
                  margin_coverage = cfg$margin_coverage,
                  holdout_reference = cfg$holdout_reference,
-                 refit_clean = cfg$refit_clean,
                  target_specificity = cfg$target_specificity), check_args)
   r <- tryCatch(
     withCallingHandlers(do.call(check_annotations, args),

@@ -245,7 +245,7 @@ stopifnot(all(low$predictions$annotation_status == "insufficient_evidence"))
 stopifnot(all(is.na(low$predictions$predicted_id_clean)))
 stopifnot(!anyNA(low$predictions$predicted_id))
 scrambled <- metadata
-scrambled$individual <- sample(scrambled$individual)
+scrambled$individual <- rep(c("donor_a", "donor_b", "donor_c"), 4)
 stopifnot(inherits(try(
   check_annotations(expression, scrambled, "sample", "individual",
                     progress = FALSE),
@@ -256,7 +256,7 @@ stopifnot(inherits(tryCatch(
                     stop_on_low_agreement = FALSE),
   warning = function(w) w), "warning"))
 
-# Individuals dropped at the refit and held-out samples still get a row and a call.
+# Held-out samples remain scored and use the same cutoff as every other sample.
 set.seed(3)
 K <- 6; n <- 5
 true_ids <- rep(paste0("d", 1:K), each = n)
@@ -268,18 +268,27 @@ colnames(X) <- paste0("s", seq_along(true_ids))
 rownames(X) <- paste0("g", 1:K)
 obs_ids <- true_ids
 obs_ids[2:5] <- "d2"; obs_ids[c(6, 11)] <- "d1"
-dropped <- check_annotations(
+set.seed(2)
+held_result <- check_annotations(
   X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
   "individual", cv_folds = NULL, min_agreement = 0, progress = FALSE,
-  mismatch_repeats = 2
+  mismatch_repeats = 2, margin_coverage = 0, detect_unknown = FALSE
 )
-dp <- dropped$predictions
+dp <- held_result$predictions
 stopifnot(identical(dp$sample_id, colnames(X)))
+stopifnot(!("refit_clean" %in% names(formals(check_annotations))))
 stopifnot(all(c("nearest_class_distance", "unknown_detection_score",
                 "unknown_detection_threshold") %in% names(dp)))
-stopifnot(all(is.na(dp$unknown_detection_score[dp$excluded_from_refit])))
-stopifnot("d1" %in% dropped$calibration$dropped_individuals)
-stopifnot(all(dp$excluded_from_refit == (dp$observed_id %in% dropped$calibration$dropped_individuals)))
-stopifnot(all(dp$suspicious[dp$sample_id %in% dropped$held_out$sample_ids]))
-stopifnot(all(dp$annotation_status[dp$excluded_from_refit & dp$suspicious] ==
-                "suspicious_without_reliable_alternative"))
+stopifnot(!any(dp$excluded_from_refit),
+          !length(held_result$calibration$dropped_individuals),
+          length(held_result$held_out$sample_ids) > 0L,
+          any(dp$confidently_misassigned & !dp$suspicious),
+          any(dp$confidently_misassigned & dp$suspicious),
+          identical(dp$suspicious,
+                    dp$annotation_score_margin > held_result$thresholds$annotation_margin))
+clean_counts <- table(dp$observed_id[!dp$confidently_misassigned])
+simulation_ids <- dp$sample_id[!dp$confidently_misassigned &
+                                dp$observed_id %in% names(clean_counts)[clean_counts >= 2L]]
+stopifnot(all(vapply(split(held_result$mismatch_simulation$sample_id,
+                           held_result$mismatch_simulation$repeat_id),
+                     function(ids) setequal(ids, simulation_ids), logical(1))))

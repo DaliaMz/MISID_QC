@@ -31,13 +31,16 @@ score margins (top versus second, and top versus observed label). First-pass agr
 below 75% triggers a warning, and below 60% the run stops unless
 `stop_on_low_agreement = FALSE`. A first-pass
 agreement gate (`min_agreement`, default 70%) must be met; confidently
-misassigned samples are held out of the reference set and the models are refit
-on clean samples. A sample is confidently misassigned when its prediction
+misassigned samples are held out of the calibration reference set, but the
+models are not refit. A sample is confidently misassigned when its prediction
 disagrees with its label and its annotation margin (top versus observed label)
 exceeds the `margin_coverage` quantile (default 0.025) of reference margins
 from correctly predicted samples. `holdout_reference = "all_alternatives"`
 (default) pools top-minus-each-alternative margins; `"top"` uses only
 top-minus-second margins. The label-swap simulation applies the same rule.
+The former `refit_clean` argument has been removed; omit it from existing calls.
+For compatibility, `calibration$dropped_individuals` is empty and
+`predictions$excluded_from_refit` is always `FALSE`.
 Flagging uses a margin threshold, and a label-swap simulation
 supplies known-truth agreement for `plot_risk_coverage()`. Margins
 are **not** annotation-correctness probabilities: no absolute probability
@@ -58,10 +61,10 @@ Other summaries use the same out-of-fold predictions for threshold selection and
 performance, so they are not independent estimates and should not be used as
 confirmed error rates. `annotation_status` is descriptive (flag, abstention,
 agreement) and is not overwritten by feasibility, which is reported separately
-in `results$feasibility`. Samples held out in the first pass are always
-`suspicious`, and every input sample has a row in `predictions`.
-`insufficient_evidence` appears when the agreement gate fails and for unflagged
-samples of individuals dropped at the refit (`excluded_from_refit`). Candidate
+in `results$feasibility`. All samples, including held-out samples, are
+`suspicious` only when their annotation margin exceeds the calibrated cutoff.
+Every input sample has a row in `predictions`.
+`insufficient_evidence` appears when the agreement gate fails. Candidate
 corrections are emitted only when identity
 recovery on simulated misannotated samples appears feasible.
 
@@ -104,8 +107,7 @@ whose prediction matches vs. differs from the observed label (agreement is in
 the title), the first-pass exclusion margins,
 the annotation-threshold populations, abstention accuracy/coverage, unknown
 individual margins, and feasibility gates. The first-pass table is kept
-separate from the final/refit table so a post-refit disagreement is not
-mistaken for a first-pass holdout. Diagnostics are opt-in because they retain
+separate from the final decisions. Diagnostics are opt-in because they retain
 additional intermediate score and margin data.
 
 For one saved GTEx simulation scenario, run from the repository root:

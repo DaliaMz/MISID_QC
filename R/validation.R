@@ -56,34 +56,20 @@
 }
 
 # Re-runs out-of-fold scoring on labels with known, simulated swaps, applying
-# the same confidently-misassigned hold-out and clean refit as the real data,
-# so agreement with the true labels can be measured.
+# the same confidently-misassigned hold-out as the real data, so agreement
+# with the pre-swap labels can be measured.
 .simulate_mismatches <- function(x, y, rate, n_folds, shrinkage,
-                                 margin_coverage, refit_clean,
-                                 holdout_reference) {
+                                 margin_coverage, holdout_reference) {
   y_sim <- .swap_labels(y, max(1L, round(rate * length(y) / 2)))
   if (all(y_sim == y)) {
     return(NULL)
   }
   y_true <- y
-  held_out <- rep(FALSE, length(y))
-  scores <- .refit_oof_scores(x, y_sim, held_out, n_folds, shrinkage)
+  scores <- .simulation_oof_scores(x, y_sim, n_folds, shrinkage)
   margins <- .score_margins(scores, y_sim)
   threshold <- .holdout_threshold(scores, margins$correct, margin_coverage,
                                   holdout_reference)
   held_out <- !margins$correct & margins$annotation_margin > threshold
-  if (isTRUE(refit_clean) && any(held_out)) {
-    clean_counts <- table(y_sim[!held_out])
-    keep <- y_sim %in% names(clean_counts)[clean_counts >= 2L]
-    if (length(unique(y_sim[keep])) >= 2L) {
-      x <- x[keep, , drop = FALSE]
-      y_sim <- y_sim[keep]
-      y_true <- y_true[keep]
-      held_out <- held_out[keep]
-      scores <- .refit_oof_scores(x, y_sim, held_out, n_folds, shrinkage)
-      margins <- .score_margins(scores, y_sim)
-    }
-  }
   data.frame(
     sample_id = rownames(x),
     true_id = y_true,
@@ -326,41 +312,29 @@
   exp(stats::median(log_margin) - mad_multiplier * stats::mad(log_margin))
 }
 
-# Second-pass out-of-fold scores trained only on non-excluded samples. Excluded
-# samples are still scored, but never used for training. `n_folds` NULL means
-# leave-one-sample-out.
-.refit_oof_scores <- function(x, y, exclude, n_folds, shrinkage,
-                              progress = FALSE) {
+# Out-of-fold scores for a simulated label set; NULL means leave-one-out.
+.simulation_oof_scores <- function(x, y, n_folds, shrinkage) {
   classes <- sort(unique(y))
   scores <- matrix(NA_real_, nrow(x), length(classes),
                    dimnames = list(rownames(x), classes))
-  distance <- rep(NA_real_, nrow(x))
   if (is.null(n_folds)) {
     fold_id <- seq_len(nrow(x))
   } else {
     fold_id <- integer(nrow(x))
     for (individual in classes) {
-      clean <- which(y == individual & !exclude)
-      fold_id[clean] <- sample(rep(seq_len(n_folds), length.out = length(clean)))
+      samples <- which(y == individual)
+      fold_id[samples] <- sample(rep(seq_len(n_folds), length.out = length(samples)))
     }
-    fold_id[exclude] <- sample(rep(seq_len(n_folds),
-                                   length.out = sum(exclude)))
   }
   folds <- unique(fold_id)
-  interval <- max(1L, ceiling(length(folds) / 10L))
   for (i in seq_along(folds)) {
     fold <- folds[i]
-    if (isTRUE(progress) && (i %% interval == 0L || i == length(folds))) {
-      message(sprintf("Refit folds: %d/%d.", i, length(folds)))
-    }
     test <- fold_id == fold
-    train <- !test & !exclude
+    train <- !test
     model <- fit_shrinkage_lda(x[train, , drop = FALSE], y[train],
                                shrinkage = shrinkage)
     scores[test, ] <- predict_shrinkage_lda(model, x[test, , drop = FALSE])
-    distance[test] <- .nearest_class_distance(model, x[test, , drop = FALSE])
   }
-  attr(scores, "nearest_distance") <- distance
   scores
 }
 

@@ -4,7 +4,7 @@
 #   Rscript simulations/Summarize_by_question.R
 #   Rscript simulations/Summarize_by_question.R \
 #     input=simulations/results/summary_v2.rds,simulations/results/summary_gtex.rds \
-#     out=simulations/results cfg=cv5_mr3_mc0.025_ts0.95
+#     out=simulations/results cfg=cv5_mr3_mc0.025_ts0.95_cutoffonly
 #
 # Arguments (key=value, all optional):
 #   input  comma-separated summary files; each gets its own section

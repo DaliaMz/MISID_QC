@@ -6,7 +6,7 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
   min_agreement = 0.7, margin_coverage = 0.025,
-  holdout_reference = c("all_alternatives", "top"), refit_clean = TRUE,
+  holdout_reference = c("all_alternatives", "top"),
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
   unknown_threshold_method = c("simulated", "mad"),
   unknown_mad = 3,
@@ -33,7 +33,7 @@ the number of stratified cross-validation folds. Fold assignment is
 randomized; call \code{set.seed()} beforehand for reproducible results.}
 \item{min_agreement}{Minimum fraction of samples whose out-of-fold top
 predicted identity equals the observed identity. Below this, the function
-warns, skips the clean refit and returns every sample as
+warns and returns every sample as
 \code{"insufficient_evidence"} (no clean predictions, flags or corrections),
 keeping raw scores, margins and the remaining outputs.}
 \item{margin_coverage}{Quantile used to set the first-pass holdout cutoff.
@@ -43,15 +43,8 @@ The reference values are chosen by \code{holdout_reference}.}
 (\code{"all_alternatives"}) from correctly predicted samples. Samples
 predicted incorrectly with an annotation margin (top versus observed score)
 above this threshold are treated as confidently misassigned and excluded from
-the threshold reference set. The same choice is applied to simulated mismatches.}
-\item{refit_clean}{Whether to refit the out-of-fold models after removing
-confidently misassigned samples from training, and use those second-pass
-scores for calibration and all downstream metrics. Individuals with fewer than
-two remaining clean samples are dropped (with all their samples) from the
-second pass and listed in \code{calibration$dropped_individuals}.
-\code{calibration$first_pass_agreement} and \code{calibration$oof_agreement}
-report agreement before and after the refit; the minimum-agreement gate
-applies to the first pass.}
+the threshold reference set. The same choice is applied to simulated mismatches.
+The original out-of-fold models are not refit after holdout.}
 \item{mismatch_rate}{Fraction of clean samples whose labels are swapped
 pairwise in a simulation that gives known-truth agreement for the
 risk-coverage curve. \code{NULL} or 0 disables the simulation.}
@@ -116,10 +109,9 @@ separate flag, not an \code{annotation_status} value. Predictions also include
 the nearest-class distance and the unknown-detection score and threshold.
 \code{predictions$annotation_status} is descriptive (flag, abstention,
 agreement) and does not depend on \code{feasibility};
-\code{"insufficient_evidence"} is used when the minimum-agreement gate fails, and for
-unflagged samples of individuals dropped at the refit (fewer than two clean samples;
-\code{predictions$excluded_from_refit}). Samples held out in the first pass are always
-\code{suspicious}, and every input sample has a row.
+\code{"insufficient_evidence"} is used when the minimum-agreement gate fails.
+All samples, including held-out samples, are flagged as suspicious only when
+their annotation margin exceeds the calibrated threshold. Every input sample has a row.
 \code{performance$misannotation_detection} is validated on simulated swaps (see its
 \code{source} column), \code{performance$all_alternatives_detection} keeps the
 every-wrong-label diagnostic, and \code{performance$recovery_accuracy_misannotated}

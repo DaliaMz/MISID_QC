@@ -94,6 +94,12 @@ individual row files; it requires saved truth, flags and detection settings.
 Regenerate the scenario files and use a new runner output directory (or
 `force=TRUE`) when changing this design.
 
+The runners no longer accept `refit_clean`: the annotation models are not
+refit, and suspicious calls use the calibrated annotation-margin cutoff even
+for held-out samples. New configuration names end in `_cutoffonly` to avoid
+skipping older runs. Use a new output directory when comparing results, or
+select the new configuration explicitly to avoid mixing historical results.
+
 After the runs finish, `Rscript simulations/Summarize_by_question.R` writes
 `summary_by_question.pdf` (one section per summary file, one page per question)
 and prints the key numbers. Q1 to Q4 use one config (the most common, or

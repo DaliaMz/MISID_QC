@@ -56,7 +56,6 @@ cv_folds <- NULL            # NULL = leave-one-sample-out
 min_agreement <- 0.7
 margin_coverage <- 0.025
 holdout_reference <- "all_alternatives" # or "top"
-refit_clean <- TRUE
 mismatch_rate <- 0.1
 mismatch_repeats <- 3L
 min_accuracy <- 0.9
@@ -165,34 +164,6 @@ cat(sprintf("Exclusion threshold %.4g; holding out %d of %d samples\n",
             top_margin_threshold, sum(confidently_misassigned), nrow(x)))
 print(first_pass_all[confidently_misassigned, ])
 
-# ---- 6. Refit on clean samples ---------------------------------------------
-dropped_individuals <- character()
-if (refit_clean && any(confidently_misassigned) && !low_agreement) {
-  clean_counts <- table(factor(y[!confidently_misassigned],
-                               levels = names(class_counts)))
-  dropped_individuals <- names(clean_counts)[clean_counts < 2L]
-  use <- !(y %in% dropped_individuals)
-  stopifnot(length(setdiff(names(class_counts), dropped_individuals)) >= 2L)
-  x <- x[use, , drop = FALSE]
-  y <- y[use]
-  confidently_misassigned <- confidently_misassigned[use]
-  class_counts <- table(y)
-  oof_scores <- .refit_oof_scores(
-    x, y, confidently_misassigned, if (is.null(cv_folds)) NULL else n_folds,
-    shrinkage, progress = progress
-  )
-  nearest_distance <- attr(oof_scores, "nearest_distance")
-  class_index <- match(y, colnames(oof_scores))
-  margins <- .score_margins(oof_scores, y)
-  predicted_id <- margins$predicted
-  correct_identity <- margins$correct
-  oof_agreement <- mean(correct_identity)
-  top_margin <- margins$top_margin
-  annotation_margin <- margins$annotation_margin
-}
-cat("Dropped individuals:", dropped_individuals, "\n")
-cat(sprintf("Post-refit agreement %.3f\n", oof_agreement))
-
 # ---- 7. Reference set and false-label margins ------------------------------
 reference <- !confidently_misassigned
 is_observed <- col(oof_scores) == class_index
@@ -229,7 +200,7 @@ if (!low_agreement && !is.null(mismatch_rate) && mismatch_rate > 0 &&
     draw <- .simulate_mismatches(
       x[clean, , drop = FALSE], y[clean], mismatch_rate,
       if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
-      refit_clean, holdout_reference
+      holdout_reference
     )
     if (!is.null(draw)) draw$repeat_id <- r
     draw
@@ -333,7 +304,7 @@ cat(sprintf("abstain < %.4g, unknown < %.4g\n", abstain_threshold,
 print(abstain_reason_counts)
 
 # ---- 13. Flagging and detection metrics ------------------------------------
-flagged <- annotation_margin > margin_threshold | confidently_misassigned
+flagged <- annotation_margin > margin_threshold
 all_alternatives_metrics <- .binary_metrics(
   c(rep(FALSE, sum(reference)), rep(TRUE, length(false_margin))),
   c(flagged[reference], false_margin > margin_threshold),
@@ -432,7 +403,7 @@ calibration <- list(
   first_pass_agreement = first_pass_agreement,
   low_agreement = low_agreement,
   oof_agreement = oof_agreement,
-  dropped_individuals = dropped_individuals,
+  dropped_individuals = character(),
   n_confidently_misassigned = sum(confidently_misassigned),
   mismatch_simulation = if (is.null(simulation)) NULL else list(
     rate = mismatch_rate,
@@ -537,14 +508,12 @@ predictions$candidate_correction <- ifelse(
   predicted_id, NA_character_
 )
 predictions$annotation_status <- ifelse(
-  !flagged & predictions$potential_unknown_individual,
-  "potential_unknown_individual",
-  ifelse(!is.na(predictions$candidate_correction),
+  !is.na(predictions$candidate_correction),
          "suspicious_with_candidate_correction",
   ifelse(flagged, "suspicious_without_reliable_alternative",
   ifelse(!confident_prediction & predicted_id != y, "no_confident_prediction",
   ifelse(confident_prediction & predicted_id != y, "weak_disagreement",
-         "no_evidence_of_incorrect_annotation"))))
+         "no_evidence_of_incorrect_annotation")))
 )
 
 # ---- 20. Low-agreement override --------------------------------------------
@@ -562,39 +531,6 @@ if (low_agreement) {
     if (detect_unknown) feasibility$unknown_individual_detection <-
       "insufficient_evidence"
   }
-}
-
-# ---- 21. Re-add samples of individuals dropped at the refit ----------------
-if (length(dropped_individuals)) {
-  gone <- first_pass_all[first_pass_all$observed_id %in% dropped_individuals, ,
-                         drop = FALSE]
-  held_gone <- gone$confidently_misassigned
-  predictions <- rbind(predictions, data.frame(
-    sample_id = gone$sample_id,
-    observed_id = gone$observed_id,
-    predicted_id = gone$predicted_id,
-    predicted_id_clean = NA_character_,
-    confident_prediction = FALSE,
-    observed_id_score = gone$observed_id_score,
-    top_candidate_score = gone$top_candidate_score,
-    top_vs_observed_score_margin = gone$annotation_margin,
-    top_score_margin = gone$top_margin,
-    annotation_score_margin = gone$annotation_margin,
-    confidently_misassigned = held_gone,
-    annotation_correctness_probability = NA_real_,
-    suspicious = if (low_agreement) NA else held_gone,
-    potential_unknown_individual = if (detect_unknown) NA else FALSE,
-    most_likely_alternative = NA_character_,
-    candidate_correction = NA_character_,
-    annotation_status = ifelse(held_gone,
-                               "suspicious_without_reliable_alternative",
-                               "insufficient_evidence"),
-    excluded_from_refit = TRUE,
-    stringsAsFactors = FALSE
-  ))
-  predictions <- predictions[match(colnames(expr), predictions$sample_id), ,
-                             drop = FALSE]
-  rownames(predictions) <- NULL
 }
 
 # ---- 22. Final result -------------------------------------------------------

@@ -32,7 +32,7 @@
 #'   is randomized; call `set.seed()` beforehand for reproducible results.
 #' @param min_agreement Minimum fraction of samples whose out-of-fold top
 #'   predicted identity equals the observed identity. Below this, the function
-#'   warns, skips the clean refit and returns every sample as
+#'   warns and returns every sample as
 #'   `"insufficient_evidence"` (no clean predictions, flags or corrections),
 #'   keeping raw scores, margins and the remaining outputs.
 #' @param margin_coverage Quantile used to set the first-pass holdout cutoff.
@@ -43,15 +43,7 @@
 #'   incorrectly with an annotation margin (top versus observed score) above
 #'   this threshold are treated as confidently misassigned and excluded from
 #'   the threshold reference set. The same choice is applied to simulated
-#'   mismatches.
-#' @param refit_clean Whether to refit the out-of-fold models after removing
-#'   confidently misassigned samples from training, and use those second-pass
-#'   scores for calibration and all downstream metrics. Individuals with fewer
-#'   than two remaining clean samples are dropped (with all their samples) from
-#'   the second pass and listed in `calibration$dropped_individuals`.
-#'   `calibration$first_pass_agreement` and `calibration$oof_agreement` report
-#'   agreement before and after the refit; the minimum-agreement gate applies
-#'   to the first pass.
+#'   mismatches. The original out-of-fold models are not refit after holdout.
 #' @param mismatch_rate Fraction of clean samples whose labels are swapped
 #'   pairwise in a simulation that gives known-truth agreement for the
 #'   risk-coverage curve. `NULL` or 0 disables the simulation.
@@ -116,10 +108,10 @@
 #'   the nearest-class distance and the unknown-detection score and threshold.
 #'   `predictions$annotation_status` is descriptive (flag, abstention,
 #'   agreement) and does not depend on `feasibility`;
-#'   `"insufficient_evidence"` is used when the minimum-agreement gate fails,
-#'   and for unflagged samples of individuals dropped at the refit (fewer than
-#'   two clean samples; `predictions$excluded_from_refit`). Samples held out in
-#'   the first pass are always `suspicious`, and every input sample has a row.
+#'   `"insufficient_evidence"` is used when the minimum-agreement gate fails.
+#'   All samples, including held-out samples, are flagged as suspicious only
+#'   when their annotation margin exceeds the calibrated threshold. Every input
+#'   sample has a row.
 #'   `performance$misannotation_detection` is validated on simulated
 #'   swaps (see its `source` column), `performance$all_alternatives_detection`
 #'   keeps the every-wrong-label diagnostic, and
@@ -134,7 +126,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               progress = interactive(), cv_folds = NULL,
                               min_agreement = 0.7, margin_coverage = 0.025,
                               holdout_reference = c("all_alternatives", "top"),
-                              refit_clean = TRUE, mismatch_rate = 0.1,
+                              mismatch_rate = 0.1,
                               min_accuracy = 0.9, detect_unknown = TRUE,
                               unknown_threshold_method = c("simulated", "mad"),
                               unknown_mad = 3,
@@ -313,16 +305,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   first_pass_agreement <- oof_agreement
   held_out_ids <- rownames(x)[confidently_misassigned]
   n_samples_first_pass <- nrow(x)
-  # Kept so samples dropped at the refit can still be reported.
-  first_pass_all <- data.frame(
-    sample_id = rownames(x), observed_id = y, predicted_id = predicted_id,
-    observed_id_score = margins$observed_score,
-    top_candidate_score = margins$top_score,
-    nearest_class_distance = nearest_distance,
-    top_margin = top_margin, annotation_margin = annotation_margin,
-    confidently_misassigned = confidently_misassigned,
-    stringsAsFactors = FALSE
-  )
   first_pass_diagnostics <- if (diagnostics) {
     data.frame(
       sample_id = rownames(x),
@@ -339,38 +321,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     NULL
   }
   first_pass_scores <- if (diagnostics) oof_scores else NULL
-  dropped_individuals <- character()
-  if (isTRUE(refit_clean) && any(confidently_misassigned) && !low_agreement) {
-    clean_counts <- table(factor(y[!confidently_misassigned],
-                                 levels = names(class_counts)))
-    dropped_individuals <- names(clean_counts)[clean_counts < 2L]
-    use <- !(y %in% dropped_individuals)
-    if (length(setdiff(names(class_counts), dropped_individuals)) < 2L) {
-      stop("Fewer than two individuals have at least two clean samples; cannot refit.")
-    }
-    if (isTRUE(progress)) {
-      message(sprintf(
-        "Refitting on clean samples (%d individuals dropped: %d samples).",
-        length(dropped_individuals), sum(!use)
-      ))
-    }
-    x <- x[use, , drop = FALSE]
-    y <- y[use]
-    confidently_misassigned <- confidently_misassigned[use]
-    class_counts <- table(y)
-    oof_scores <- .refit_oof_scores(
-      x, y, confidently_misassigned, if (is.null(cv_folds)) NULL else n_folds,
-      shrinkage, progress = progress
-    )
-    nearest_distance <- attr(oof_scores, "nearest_distance")
-    class_index <- match(y, colnames(oof_scores))
-    margins <- .score_margins(oof_scores, y)
-    predicted_id <- margins$predicted
-    correct_identity <- margins$correct
-    oof_agreement <- mean(correct_identity)
-    top_margin <- margins$top_margin
-    annotation_margin <- margins$annotation_margin
-  }
   if (isTRUE(progress)) {
     message("Setting the annotation margin threshold and summarizing validation metrics.")
   }
@@ -416,7 +366,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       draw <- .simulate_mismatches(
         x[clean, , drop = FALSE], y[clean], mismatch_rate,
         if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
-        refit_clean, holdout_reference
+        holdout_reference
       )
       if (!is.null(draw)) draw$repeat_id <- r
       draw
@@ -528,10 +478,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # Flagging depends on the annotation margin alone: a clearly beaten observed
   # label is suspicious even when the top margin is too small to name the
   # replacement, which needs a confident prediction.
-  # Samples held out in the first pass are always flagged: they were already
-  # judged misassigned and are not in the reference set. Reference-only metrics
-  # below are unaffected.
-  flagged <- annotation_margin > margin_threshold | confidently_misassigned
+  flagged <- annotation_margin > margin_threshold
 
   # Every wrong label as a false label: a broad robustness diagnostic that
   # also includes easily confused identities real swaps rarely involve.
@@ -646,7 +593,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     first_pass_agreement = first_pass_agreement,
     low_agreement = low_agreement,
     oof_agreement = oof_agreement,
-    dropped_individuals = dropped_individuals,
+    dropped_individuals = character(),
     n_confidently_misassigned = sum(confidently_misassigned),
     mismatch_simulation = if (is.null(simulation)) NULL else list(
       rate = mismatch_rate,
@@ -937,43 +884,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         performance = performance
       )
     )
-  }
-  # Samples of individuals dropped at the refit have no clean model for their
-  # observed label, so they get no refit scores, but they are still reported:
-  # held-out ones as suspicious, the rest as insufficient evidence.
-  if (length(dropped_individuals)) {
-    gone <- first_pass_all[first_pass_all$observed_id %in% dropped_individuals, ,
-                           drop = FALSE]
-    held_gone <- gone$confidently_misassigned
-    result$predictions <- rbind(result$predictions, data.frame(
-      sample_id = gone$sample_id,
-      observed_id = gone$observed_id,
-      predicted_id = gone$predicted_id,
-      predicted_id_clean = NA_character_,
-      confident_prediction = FALSE,
-      observed_id_score = gone$observed_id_score,
-      top_candidate_score = gone$top_candidate_score,
-      top_vs_observed_score_margin = gone$annotation_margin,
-      top_score_margin = gone$top_margin,
-      annotation_score_margin = gone$annotation_margin,
-      nearest_class_distance = gone$nearest_class_distance,
-      unknown_detection_score = NA_real_,
-      unknown_detection_threshold = NA_real_,
-      confidently_misassigned = held_gone,
-      annotation_correctness_probability = NA_real_,
-      suspicious = if (low_agreement) NA else held_gone,
-      potential_unknown_individual = if (detect_unknown) NA else FALSE,
-      most_likely_alternative = NA_character_,
-      candidate_correction = NA_character_,
-      annotation_status = ifelse(held_gone,
-                                 "suspicious_without_reliable_alternative",
-                                 "insufficient_evidence"),
-      excluded_from_refit = TRUE,
-      stringsAsFactors = FALSE
-    ))
-    result$predictions <- result$predictions[
-      match(colnames(expr), result$predictions$sample_id), , drop = FALSE]
-    rownames(result$predictions) <- NULL
   }
   result
 }

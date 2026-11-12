@@ -230,7 +230,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
   }
   draw_page(list(holdout_density, holdout_points), 2, 1)
 
-  # 3. Mismatch simulation: threshold-only, not the combined holdout flag.
+  # 3. Mismatch simulation: threshold-only detection.
   cutoff <- result$thresholds$annotation_margin
   positives <- if (is.null(sim)) numeric() else sim$annotation_margin[sim$actually_misannotated]
   negatives <- if (is.null(sim)) numeric() else sim$annotation_margin[!sim$actually_misannotated]
@@ -247,7 +247,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     num(det$n_repeats_validated), " cross-fitted repeats).\n",
     "Simulated rows across ", if (is.null(sim)) 0 else length(unique(sim$repeat_id)),
     " repeats; some samples can appear in multiple repeats.\n",
-    "Cutoff only; final flags also include first-pass holdouts. Pre-swap labels are assumed truth."
+    "Curves show cutoff-only detection. Pre-swap labels are assumed truth."
   )
   mismatch_plot <- if (is.null(sim) || !length(positives) || !length(negatives)) {
     empty(paste("3. Misannotation detection |", verdict("misannotation_detection")),
@@ -308,7 +308,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
   }
   draw_page(list(unknown_plot), 1, 1)
 
-  # 6. Actual sample distributions; dropped-refit scores are first-pass scores.
+  # 6. Actual sample distributions; historical results may include dropped-refit scores.
   final <- p[!p$excluded_from_refit, , drop = FALSE]
   real_holdout <- if (is.null(first)) {
     empty("6. First-pass holdout", "Requires diagnostics = TRUE")
@@ -318,7 +318,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
   missing_refit <- sum(p$excluded_from_refit)
   real_detection <- histogram(final$annotation_score_margin, result$thresholds$annotation_margin,
                               "Final annotation margins",
-                              paste("Final flags also include first-pass holdouts; excluded from refit:", missing_refit),
+                              paste("Dashed = calibrated cutoff; excluded from refit:", missing_refit),
                               "Annotation margin")
   real_recovery <- histogram(final$top_score_margin, result$thresholds$abstain_margin,
                              "Final top margins",
