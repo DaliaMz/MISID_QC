@@ -10,12 +10,13 @@ annotation_report(result, file = "annotation_report.pdf")
 }
 \value{The PDF path, invisibly.}
 \description{
-Summarizes the first-pass holdout, detection and unknown thresholds, recovery
-coverage, and final sample calls. Run \code{\link{check_annotations}} with
-\code{diagnostics = TRUE} for the calibration plots. Without diagnostics, the
-report explicitly marks those plots as unavailable.
+Writes a six-page ggplot2 report covering the overview, first-pass holdout,
+misannotation calibration, recovery coverage, unknown detection, and actual
+sample distributions. Run \code{\link{check_annotations}} with
+\code{diagnostics = TRUE} for the detailed plots; unavailable sections are labelled.
 }
 \details{
 Internal validation uses simulated errors and is not ground truth or a
 sample-level probability. First-pass agreement is with observed labels.
+Margins and unknown scores are plotted on their original scales.
 }

@@ -84,8 +84,8 @@ diagnostic_tables$final_pass
 diagnostic_tables$annotation_threshold
 ```
 
-For a printable overview, holdout and calibration plots, recovery coverage,
-unknown detection, and flagged-sample tables, write a PDF with:
+For a printable six-page overview, holdout and calibration plots, recovery
+coverage, unknown detection, and sample score distributions, write a PDF with:
 
 ```r
 result <- check_annotations(expression_matrix, sample_metadata, "sample", "individual",
@@ -93,6 +93,8 @@ result <- check_annotations(expression_matrix, sample_metadata, "sample", "indiv
 annotation_report(result, "annotation-report.pdf")
 ```
 
+The report uses ggplot2, which must be installed before installing this package.
+Margins and unknown scores are plotted on their original, untransformed scales.
 The report marks detailed calibration plots unavailable if diagnostics were
 not retained. Its simulated validation estimates are exploratory, not true
 error rates or sample-level probabilities.

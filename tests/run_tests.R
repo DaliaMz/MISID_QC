@@ -146,6 +146,19 @@ stopifnot(setequal(
 ))
 stopifnot(nrow(diagnostic_result$diagnostics$annotation_threshold) > 0L)
 stopifnot(nrow(diagnostic_result$diagnostics$abstention$curve) > 0L)
+holdout_reference <- SampleAnnotationLikelihood:::.report_holdout_reference(diagnostic_result)
+stopifnot(isTRUE(all.equal(
+  unname(quantile(holdout_reference, 0.025, type = 1)),
+  diagnostic_result$calibration$exclusion_margin_threshold
+)))
+top_result <- check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  holdout_reference = "top", diagnostics = TRUE
+)
+top_reference <- SampleAnnotationLikelihood:::.report_holdout_reference(top_result)
+stopifnot(length(top_reference) == sum(top_result$diagnostics$first_pass$correct),
+          isTRUE(all.equal(unname(quantile(top_reference, 0.025, type = 1)),
+                           top_result$calibration$exclusion_margin_threshold)))
 
 report_file <- tempfile(fileext = ".pdf")
 stopifnot(identical(annotation_report(diagnostic_result, report_file), report_file))
@@ -163,15 +176,25 @@ report_file <- tempfile(fileext = ".pdf")
 annotation_report(unknown_off, report_file)
 stopifnot(file.exists(report_file), file.info(report_file)$size > 0)
 unlink(report_file)
-many_calls <- diagnostic_result
-many_calls$predictions <- many_calls$predictions[rep(seq_len(nrow(result$predictions)),
-                                                   length.out = 23L), ]
-many_calls$predictions$suspicious <- TRUE
+curve <- SampleAnnotationLikelihood:::.report_rate_curve(
+  c(1, 2, 2, 4), c(0, 1, 2, 3), 2
+)
+at_cutoff <- curve[curve$x == 2, ]
+stopifnot(at_cutoff$rate[at_cutoff$metric == "Sensitivity"] == 0.25,
+          at_cutoff$rate[at_cutoff$metric == "Specificity"] == 0.75)
+curve <- SampleAnnotationLikelihood:::.report_rate_curve(
+  c(1, 2, 2, 4), c(0, 1, 2, 3), 2, "lower"
+)
+at_cutoff <- curve[curve$x == 2, ]
+stopifnot(at_cutoff$rate[at_cutoff$metric == "Sensitivity"] == 0.25,
+          at_cutoff$rate[at_cutoff$metric == "Specificity"] == 0.5)
 report_file <- tempfile(fileext = ".pdf")
-annotation_report(many_calls, report_file)
+set.seed(123)
+seed_before <- .Random.seed
+annotation_report(diagnostic_result, report_file)
+stopifnot(identical(seed_before, .Random.seed))
 pdf_bytes <- readBin(report_file, "raw", n = file.info(report_file)$size)
-# Eight pages plus the PDF page-tree object: overview, five plots, and two tables.
-stopifnot(length(grepRaw(charToRaw("/Type /Page"), pdf_bytes, all = TRUE)) == 9L)
+stopifnot(length(grepRaw(charToRaw("/Type /Page"), pdf_bytes, all = TRUE)) == 7L)
 unlink(report_file)
 
 cv_progress_messages <- character()
