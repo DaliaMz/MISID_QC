@@ -4,6 +4,11 @@ Development scripts for testing `check_annotations()`. Not part of the
 installed package (excluded via `.Rbuildignore`). Install the package first
 (`R CMD INSTALL .`), then run scripts from the repo root.
 
+On the PBS cluster, run `bash simulations/reinstall_package.sh` before
+submitting jobs. It activates the same `jupyter` Conda environment as the PBS
+runners, reinstalls the package, and prints its installed location. Do not
+reinstall while simulation jobs are using the package.
+
 - `simulate.R`: `make_dataset()` builds Gaussian expression data with
   confusable pairs of individuals and random label swaps, and records which
   samples are truly mislabelled.

@@ -1,3 +1,4 @@
+export(annotation_report)
 export(check_annotations)
 export(fit_shrinkage_lda)
 export(plot_risk_coverage)

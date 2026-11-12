@@ -147,6 +147,33 @@ stopifnot(setequal(
 stopifnot(nrow(diagnostic_result$diagnostics$annotation_threshold) > 0L)
 stopifnot(nrow(diagnostic_result$diagnostics$abstention$curve) > 0L)
 
+report_file <- tempfile(fileext = ".pdf")
+stopifnot(identical(annotation_report(diagnostic_result, report_file), report_file))
+stopifnot(file.exists(report_file), file.info(report_file)$size > 0)
+unlink(report_file)
+report_file <- tempfile(fileext = ".pdf")
+annotation_report(no_feasibility, report_file)
+stopifnot(file.exists(report_file), file.info(report_file)$size > 0)
+unlink(report_file)
+unknown_off <- check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  detect_unknown = FALSE, diagnostics = TRUE
+)
+report_file <- tempfile(fileext = ".pdf")
+annotation_report(unknown_off, report_file)
+stopifnot(file.exists(report_file), file.info(report_file)$size > 0)
+unlink(report_file)
+many_calls <- diagnostic_result
+many_calls$predictions <- many_calls$predictions[rep(seq_len(nrow(result$predictions)),
+                                                   length.out = 23L), ]
+many_calls$predictions$suspicious <- TRUE
+report_file <- tempfile(fileext = ".pdf")
+annotation_report(many_calls, report_file)
+pdf_bytes <- readBin(report_file, "raw", n = file.info(report_file)$size)
+# Eight pages plus the PDF page-tree object: overview, five plots, and two tables.
+stopifnot(length(grepRaw(charToRaw("/Type /Page"), pdf_bytes, all = TRUE)) == 9L)
+unlink(report_file)
+
 cv_progress_messages <- character()
 withCallingHandlers(
   cv_result <- check_annotations(expression, metadata, "sample", "individual",

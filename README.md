@@ -84,6 +84,19 @@ diagnostic_tables$final_pass
 diagnostic_tables$annotation_threshold
 ```
 
+For a printable overview, holdout and calibration plots, recovery coverage,
+unknown detection, and flagged-sample tables, write a PDF with:
+
+```r
+result <- check_annotations(expression_matrix, sample_metadata, "sample", "individual",
+                            diagnostics = TRUE)
+annotation_report(result, "annotation-report.pdf")
+```
+
+The report marks detailed calibration plots unavailable if diagnostics were
+not retained. Its simulated validation estimates are exploratory, not true
+error rates or sample-level probabilities.
+
 The PDF plots boxplots of first-pass top and annotation margins for samples
 whose prediction matches vs. differs from the observed label (agreement is in
 the title), the first-pass exclusion margins,
