@@ -79,8 +79,8 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               target_specificity = as.numeric(as_vals(opt$target_specificity)),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
               sorted = FALSE)
-# The suffix distinguishes cutoff-only results from historical runs.
-configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s%s_cutoffonly", cv_folds, mismatch_repeats,
+# The suffix distinguishes dual calibration and verdicts from historical runs.
+configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s%s_dualcal_simspec", cv_folds, mismatch_repeats,
                          margin_coverage, target_specificity,
                          ifelse(holdout_reference == "all_alternatives", "",
                                 paste0("_hr", holdout_reference)),
@@ -144,8 +144,9 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
                              p$predicted_id[bad] == truth[bad]),
     tp = tp, fp = fp, fn = fn, tn = tn,
     sens_true = sens, spec_true = spec, precision_true = ratio(tp, tp + fp),
-    sens_reported = rep_m$sensitivity, spec_reported = rep_m$specificity,
-    sens_gap = rep_m$sensitivity - sens, spec_gap = rep_m$specificity - spec,
+    sens_reported = rep_m$sensitivity, spec_reported = rep_m$simulated_specificity,
+    reference_spec_reported = rep_m$specificity,
+    sens_gap = rep_m$sensitivity - sens, spec_gap = rep_m$simulated_specificity - spec,
     verdict = verdict,
     # Sensitivity is undefined for clean scenarios, so score those on specificity.
     verdict_correct = if (low) NA else (verdict == "appears_feasible") ==

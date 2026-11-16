@@ -49,8 +49,22 @@ prevalence is unknown. Internal artificial relabeling and leave-one-individual-
 out experiments provide exploratory, dataset-specific performance summaries.
 Relabeling metrics: detection sensitivity comes from the simulated pairwise
 swaps and, with `mismatch_repeats >= 2`, is cross-fitted (each repeat is
-scored with a cutoff tuned on the other repeats; see
-`performance$misannotation_detection$source`). The every-wrong-label and
+scored with a cutoff tuned on simulated positives and unchanged samples from the
+other repeats, plus the reference negatives; see
+`performance$misannotation_detection$source`).
+The final cutoff maximizes simulated-swap sensitivity while independently
+requiring both reference and unchanged simulated specificity to meet
+`target_specificity`. If simulations are unavailable, it falls back to
+calibration against the reference and all wrong-label alternatives.
+The detection verdict also requires simulated specificity among unchanged
+simulation samples to reach `target_specificity`. This specificity is
+cross-fitted by repeat when possible, and in-sample with one repeat; without
+simulated positives or unchanged samples the verdict is insufficient evidence.
+`performance$misannotation_detection$simulated_specificity` is the verdict
+estimate, while `specificity` is the original reference specificity.
+The report's cutoff curves show in-sample rates; cross-fitted specificity
+can be below the target even when the calibration rates meet it.
+The every-wrong-label and
 all-pairs swap metrics are kept as diagnostics
 (`performance$all_alternatives_detection`, `performance$pairwise_swap_detection`);
 precision reflects those artificial scenarios, not a population error

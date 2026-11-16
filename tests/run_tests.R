@@ -119,13 +119,42 @@ swap_data <- data.frame(
   actually_misannotated = TRUE,
   repeat_id = rep(1:3, each = 2)
 )
-crossfit <- SampleAnnotationLikelihood:::.crossfit_swap_detection(
+stopifnot(is.null(SampleAnnotationLikelihood:::.crossfit_swap_detection(
   negatives = c(0, 0.1, 0.2, 0.3), swap_data, target_specificity = 0.95
-)
-stopifnot(crossfit$n_repeats == 3L, crossfit$sensitivity == 1)
+)))
 stopifnot(is.null(SampleAnnotationLikelihood:::.crossfit_swap_detection(
   c(0, 0.1), swap_data[swap_data$repeat_id == 1L, ], 0.95
 )))
+swap_data <- data.frame(
+  annotation_margin = c(10, 11, 0, 9, 12, 13, 0, 20, 14, 15, 0, 3),
+  actually_misannotated = rep(c(TRUE, TRUE, FALSE, FALSE), 3),
+  repeat_id = rep(1:3, each = 4)
+)
+crossfit <- SampleAnnotationLikelihood:::.crossfit_swap_detection(
+  c(0, 0.1, 0.2, 0.3), swap_data, 0.95
+)
+stopifnot(crossfit$sensitivity == 1 / 3,
+          crossfit$simulated_specificity == 5 / 6,
+          crossfit$n_simulated_negatives == 6L)
+without_negatives <- swap_data[swap_data$actually_misannotated, ]
+stopifnot(is.null(SampleAnnotationLikelihood:::.crossfit_swap_detection(
+  c(0, 0.1, 0.2, 0.3), without_negatives, 0.95
+)))
+select_threshold <- SampleAnnotationLikelihood:::.select_threshold
+ref_negatives <- c(0, 0.1, 0.2, 0.3)
+sim_negatives <- c(0, 9, 0, 20, 0, 3)
+positives <- c(10, 11, 12, 13, 14, 15)
+reference_only <- select_threshold(ref_negatives, positives, 0.95, "upper")
+dual <- select_threshold(ref_negatives, positives, 0.95, "upper",
+                         additional_negatives = sim_negatives)
+stopifnot(mean(sim_negatives <= reference_only) < 0.95,
+          mean(ref_negatives <= dual) >= 0.95,
+          mean(sim_negatives <= dual) >= 0.95,
+          dual == 21,
+          select_threshold(ref_negatives, numeric(), 0.95, "upper",
+                           additional_negatives = sim_negatives) == 20,
+          select_threshold(c(3, 4), numeric(), 0.95, "lower",
+                           additional_negatives = c(0, 1)) == 0)
 
 set.seed(12)
 diagnostic_result <- check_annotations(
@@ -145,6 +174,10 @@ stopifnot(setequal(
   ]
 ))
 stopifnot(nrow(diagnostic_result$diagnostics$annotation_threshold) > 0L)
+stopifnot("simulated_unchanged_negative" %in%
+            diagnostic_result$diagnostics$annotation_threshold$population,
+          diagnostic_result$performance$misannotation_detection$specificity >= 0.95,
+          diagnostic_result$performance$misannotation_detection$simulated_specificity_in_sample >= 0.95)
 stopifnot(nrow(diagnostic_result$diagnostics$abstention$curve) > 0L)
 holdout_reference <- SampleAnnotationLikelihood:::.report_holdout_reference(diagnostic_result)
 stopifnot(isTRUE(all.equal(
@@ -268,7 +301,7 @@ colnames(X) <- paste0("s", seq_along(true_ids))
 rownames(X) <- paste0("g", 1:K)
 obs_ids <- true_ids
 obs_ids[2:5] <- "d2"; obs_ids[c(6, 11)] <- "d1"
-set.seed(2)
+set.seed(4)
 held_result <- check_annotations(
   X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
   "individual", cv_folds = NULL, min_agreement = 0, progress = FALSE,
@@ -292,3 +325,28 @@ simulation_ids <- dp$sample_id[!dp$confidently_misassigned &
 stopifnot(all(vapply(split(held_result$mismatch_simulation$sample_id,
                            held_result$mismatch_simulation$repeat_id),
                      function(ids) setequal(ids, simulation_ids), logical(1))))
+metrics <- held_result$performance$misannotation_detection
+stopifnot(identical(held_result$feasibility$misannotation_detection,
+                    if (metrics$sensitivity >= 0.8 &&
+                        metrics$simulated_specificity >= 0.95) {
+                      "appears_feasible"
+                    } else "unreliable"))
+set.seed(2)
+single_held <- check_annotations(
+  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+  "individual", min_agreement = 0, progress = FALSE, mismatch_repeats = 1,
+  margin_coverage = 0, detect_unknown = FALSE
+)
+single_metrics <- single_held$performance$misannotation_detection
+stopifnot(identical(single_metrics$source, "simulated_swaps_in_sample"),
+          identical(single_metrics$simulated_specificity,
+                    single_metrics$simulated_specificity_in_sample))
+set.seed(2)
+no_swaps <- check_annotations(
+  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+  "individual", min_agreement = 0, progress = FALSE, mismatch_rate = 0,
+  margin_coverage = 0, detect_unknown = FALSE
+)
+stopifnot(is.na(no_swaps$performance$misannotation_detection$simulated_specificity),
+          identical(no_swaps$feasibility$misannotation_detection,
+                    "insufficient_evidence"))

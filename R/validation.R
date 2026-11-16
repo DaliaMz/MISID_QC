@@ -157,32 +157,49 @@
 
 # Cutoff separating `negatives` from `positives`. With direction "upper" a
 # value is flagged when it exceeds the cutoff, with "lower" when it falls below
-# it. Among cutoffs whose specificity on `negatives` meets the target, the one
-# with the highest sensitivity wins; remaining ties resolve to the median tied
-# cutoff, which sits in the middle of any gap between the groups.
+# it. Each supplied negative population must independently meet the target.
 .select_threshold <- function(negatives, positives, target_specificity,
-                              direction = c("upper", "lower")) {
+                              direction = c("upper", "lower"),
+                              additional_negatives = NULL) {
   direction <- match.arg(direction)
   negatives <- negatives[is.finite(negatives)]
   positives <- positives[is.finite(positives)]
+  additional_negatives <- additional_negatives[is.finite(additional_negatives)]
   if (!length(positives)) {
-    return(if (direction == "upper") {
+    cutoff <- if (direction == "upper") {
       unname(stats::quantile(negatives, probs = target_specificity, type = 1))
     } else {
       .select_lower_threshold(negatives, target_specificity)
-    })
+    }
+    if (length(additional_negatives)) {
+      extra_cutoff <- if (direction == "upper") {
+        unname(stats::quantile(additional_negatives, probs = target_specificity, type = 1))
+      } else {
+        .select_lower_threshold(additional_negatives, target_specificity)
+      }
+      cutoff <- if (direction == "upper") max(cutoff, extra_cutoff) else
+        min(cutoff, extra_cutoff)
+    }
+    return(cutoff)
   }
-  values <- sort(unique(c(negatives, positives)))
+  values <- sort(unique(c(negatives, positives, additional_negatives)))
   candidates <- c(values[1L] - 1, (values[-1L] + values[-length(values)]) / 2,
                   values[length(values)] + 1)
   if (direction == "upper") {
     specificity <- vapply(candidates, function(c) mean(negatives <= c), 1)
+    extra_specificity <- if (length(additional_negatives)) {
+      vapply(candidates, function(c) mean(additional_negatives <= c), 1)
+    } else rep(1, length(candidates))
     sensitivity <- vapply(candidates, function(c) mean(positives > c), 1)
   } else {
     specificity <- vapply(candidates, function(c) mean(negatives >= c), 1)
+    extra_specificity <- if (length(additional_negatives)) {
+      vapply(candidates, function(c) mean(additional_negatives >= c), 1)
+    } else rep(1, length(candidates))
     sensitivity <- vapply(candidates, function(c) mean(positives < c), 1)
   }
-  eligible <- which(specificity >= target_specificity)
+  eligible <- which(specificity >= target_specificity &
+                      extra_specificity >= target_specificity)
   best <- eligible[sensitivity[eligible] == max(sensitivity[eligible])]
   best <- best[specificity[best] == max(specificity[best])]
   tied <- candidates[best]
@@ -195,10 +212,8 @@
   candidates[best][ceiling(length(best) / 2)]
 }
 
-# Detection sensitivity on simulated swaps the cutoff was not tuned on. Each
-# repeat is scored with a cutoff chosen from the other repeats' swaps and the
-# real reference margins (`negatives`). Returns NULL with fewer than two
-# repeats that contain swaps.
+# Evaluate swaps and unchanged samples using cutoffs chosen from other repeats'
+# simulated samples and the real reference margins.
 .crossfit_swap_detection <- function(negatives, simulation,
                                      target_specificity) {
   swaps <- simulation[simulation$actually_misannotated &
@@ -209,18 +224,34 @@
   if (length(by_repeat) < 2L) {
     return(NULL)
   }
-  per_repeat <- vapply(names(by_repeat), function(r) {
+  unchanged <- simulation[!simulation$actually_misannotated &
+                            is.finite(simulation$annotation_margin), , drop = FALSE]
+  if (!nrow(unchanged) ||
+      any(vapply(names(by_repeat), function(r) {
+        !any(unchanged$repeat_id != r)
+      }, logical(1)))) {
+    return(NULL)
+  }
+  per_repeat <- lapply(names(by_repeat), function(r) {
     threshold <- .select_threshold(
       negatives, unlist(by_repeat[names(by_repeat) != r], use.names = FALSE),
-      target_specificity, "upper"
+      target_specificity, "upper",
+      additional_negatives = unchanged$annotation_margin[unchanged$repeat_id != r]
     )
-    mean(by_repeat[[r]] > threshold)
-  }, numeric(1))
+    held_unchanged <- unchanged$annotation_margin[unchanged$repeat_id == r]
+    c(sensitivity = mean(by_repeat[[r]] > threshold),
+      n_unchanged = length(held_unchanged),
+      n_correct = sum(held_unchanged <= threshold))
+  })
+  per_repeat <- do.call(rbind, per_repeat)
   sizes <- lengths(by_repeat)
   list(
-    sensitivity = sum(per_repeat * sizes) / sum(sizes),
-    sensitivity_sd = stats::sd(per_repeat),
-    n_repeats = length(per_repeat)
+    sensitivity = sum(per_repeat[, "sensitivity"] * sizes) / sum(sizes),
+    sensitivity_sd = stats::sd(per_repeat[, "sensitivity"]),
+    simulated_specificity = .safe_divide(sum(per_repeat[, "n_correct"]),
+                                         sum(per_repeat[, "n_unchanged"])),
+    n_simulated_negatives = sum(per_repeat[, "n_unchanged"]),
+    n_repeats = nrow(per_repeat)
   )
 }
 

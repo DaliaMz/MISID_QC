@@ -96,7 +96,10 @@ Regenerate the scenario files and use a new runner output directory (or
 
 The runners no longer accept `refit_clean`: the annotation models are not
 refit, and suspicious calls use the calibrated annotation-margin cutoff even
-for held-out samples. New configuration names end in `_cutoffonly` to avoid
+for held-out samples. The detection verdict now uses simulated specificity,
+cross-fitted by repeat when possible, rather than reference specificity.
+Cutoff calibration now separately constrains specificity on reference and
+unchanged simulated samples. New configuration names end in `_dualcal_simspec` to avoid
 skipping older runs. Use a new output directory when comparing results, or
 select the new configuration explicitly to avoid mixing historical results.
 

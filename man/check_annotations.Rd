@@ -21,8 +21,9 @@ sample names in \code{colnames(expr)}.}
 \item{sample_col}{Name of the sample identifier column.}
 \item{id_col}{Name of the observed individual identifier column.}
 \item{shrinkage}{Shrinkage fraction for the diagonal covariance target.}
-\item{target_specificity}{Target specificity used to select the lower-tail
-annotation margin threshold.}
+\item{target_specificity}{Minimum specificity for each of the reference and
+unchanged simulated samples when selecting the annotation threshold. Also used
+for the simulated unknown-individual cutoff.}
 \item{assess_feasibility}{Whether to return task-specific feasibility
 assessments based on internal validation.}
 \item{progress}{Whether to report progress updates. Defaults to \code{TRUE}
@@ -50,8 +51,9 @@ pairwise in a simulation that gives known-truth agreement for the
 risk-coverage curve. \code{NULL} or 0 disables the simulation.}
 \item{mismatch_repeats}{Number of independent label-swap simulations whose results
 are pooled to tune the annotation cutoff. With at least two repeats, detection
-sensitivity is cross-fitted: each repeat is scored with a cutoff tuned on the
-other repeats. More repeats give a less extreme cutoff and a steadier
+sensitivity and simulated specificity are cross-fitted: each repeat is scored
+with a cutoff tuned on the other repeats' swapped and unchanged samples and the
+reference negatives. More repeats give a less extreme cutoff and a steadier
 sensitivity estimate at the cost of roughly proportional simulation time. With 1,
 sensitivity is in-sample.}
 \item{stop_on_low_agreement}{If \code{TRUE} (default), the run stops with an
@@ -112,8 +114,13 @@ agreement) and does not depend on \code{feasibility};
 \code{"insufficient_evidence"} is used when the minimum-agreement gate fails.
 All samples, including held-out samples, are flagged as suspicious only when
 their annotation margin exceeds the calibrated threshold. Every input sample has a row.
-\code{performance$misannotation_detection} is validated on simulated swaps (see its
-\code{source} column), \code{performance$all_alternatives_detection} keeps the
+\code{performance$misannotation_detection} includes simulated-swap sensitivity,
+\code{simulated_specificity} on unchanged simulation samples and
+\code{specificity} on the original reference samples. The detection verdict
+uses simulated sensitivity and simulated specificity; without simulated
+specificity it is \code{"insufficient_evidence"}. With one repeat both rates
+are in-sample. Precision, accuracy and ranking metrics in that table use the
+reference negatives and final cutoff. \code{performance$all_alternatives_detection} keeps the
 every-wrong-label diagnostic, and \code{performance$recovery_accuracy_misannotated}
 and \code{performance$correction_validation} report recovery on simulated
 misannotated samples and the precision and recall of proposed corrections.

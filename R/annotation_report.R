@@ -166,8 +166,8 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     sprintf("Samples: %d | First-pass agreement: %s | Held out: %d",
             nrow(p), pct(result$calibration$first_pass_agreement),
             result$held_out$n_confidently_misassigned),
-    sprintf("Detection: %s | sensitivity %s | specificity %s",
-            verdict("misannotation_detection"), pct(det$sensitivity), pct(det$specificity)),
+    sprintf("Detection: %s | sensitivity %s | simulated specificity %s",
+            verdict("misannotation_detection"), pct(det$sensitivity), pct(det$simulated_specificity)),
     sprintf("Detection cutoff: %s | target specificity: %s",
             num(result$thresholds$annotation_margin), pct(result$thresholds$target_specificity)),
     sprintf("Recovery: %s | simulated mislabel accuracy %s | cutoff %s",
@@ -242,12 +242,13 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     " (n=", sum(is.finite(positives)), "); simulated specificity ",
     pct(1 - rate(negatives, cutoff)), " (n=", sum(is.finite(negatives)), ").\n",
     "Reference specificity ", pct(1 - rate(reference_negatives, cutoff)),
-    "; reported sensitivity ", pct(det$sensitivity), " (",
+    "; verdict sensitivity ", pct(det$sensitivity), "; verdict simulated specificity ",
+    pct(det$simulated_specificity), " (",
     if (is.null(det$source)) "source unavailable" else det$source, ", ",
     num(det$n_repeats_validated), " cross-fitted repeats).\n",
     "Simulated rows across ", if (is.null(sim)) 0 else length(unique(sim$repeat_id)),
     " repeats; some samples can appear in multiple repeats.\n",
-    "Curves show cutoff-only detection. Pre-swap labels are assumed truth."
+    "Cutoff uses both negative groups; curves are in-sample. Pre-swap labels are assumed truth."
   )
   mismatch_plot <- if (is.null(sim) || !length(positives) || !length(negatives)) {
     empty(paste("3. Misannotation detection |", verdict("misannotation_detection")),

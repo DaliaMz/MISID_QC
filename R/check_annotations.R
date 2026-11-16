@@ -20,8 +20,9 @@
 #' @param sample_col Name of the sample identifier column.
 #' @param id_col Name of the observed individual identifier column.
 #' @param shrinkage Shrinkage fraction for the diagonal covariance target.
-#' @param target_specificity Target specificity used to select the lower-tail
-#'   annotation margin threshold.
+#' @param target_specificity Minimum specificity for each of the reference
+#'   and unchanged simulated samples when selecting the annotation threshold.
+#'   Also used for the simulated unknown-individual cutoff.
 #' @param assess_feasibility Whether to return task-specific feasibility
 #'   assessments based on internal validation.
 #' @param progress Whether to report progress updates. Defaults to `TRUE` in
@@ -49,8 +50,9 @@
 #'   risk-coverage curve. `NULL` or 0 disables the simulation.
 #' @param mismatch_repeats Number of independent label-swap simulations whose
 #'   results are pooled to tune the annotation cutoff. With at least two
-#'   repeats, detection sensitivity is cross-fitted: each repeat is scored with
-#'   a cutoff tuned on the other repeats. More repeats give a less extreme
+#'   repeats, detection sensitivity and simulated specificity are cross-fitted:
+#'   each repeat is scored with a cutoff tuned on the other repeats' swapped
+#'   and unchanged samples and the reference negatives. More repeats give a less extreme
 #'   cutoff and a steadier sensitivity estimate at the cost of roughly
 #'   proportional simulation time. With 1, sensitivity is in-sample.
 #' @param stop_on_low_agreement If `TRUE` (default), the run stops with an
@@ -112,8 +114,14 @@
 #'   All samples, including held-out samples, are flagged as suspicious only
 #'   when their annotation margin exceeds the calibrated threshold. Every input
 #'   sample has a row.
-#'   `performance$misannotation_detection` is validated on simulated
-#'   swaps (see its `source` column), `performance$all_alternatives_detection`
+#'   `performance$misannotation_detection` includes simulated-swap sensitivity,
+#'   `simulated_specificity` on unchanged simulation samples and `specificity`
+#'   on the original reference samples. The detection verdict uses simulated
+#'   sensitivity and simulated specificity; without simulated specificity it
+#'   is `"insufficient_evidence"`. With one repeat both rates are in-sample.
+#'   Precision, accuracy and ranking metrics in that table use the reference
+#'   negatives and final cutoff.
+#'   `performance$all_alternatives_detection`
 #'   keeps the every-wrong-label diagnostic, and
 #'   `performance$recovery_accuracy_misannotated` and
 #'   `performance$correction_validation` report recovery on simulated
@@ -376,18 +384,20 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       simulation <- do.call(rbind, draws)
     }
   }
-  # Real mislabels resemble the simulated swaps, not every possible wrong
-  # label (many of which are easily confused identities with tiny margins), so
-  # the cutoff is tuned against the swaps when they are available.
   swap_margin_positives <- if (!is.null(simulation)) {
     simulation$annotation_margin[simulation$actually_misannotated]
+  } else {
+    numeric()
+  }
+  swap_margin_negatives <- if (!is.null(simulation)) {
+    simulation$annotation_margin[!simulation$actually_misannotated]
   } else {
     numeric()
   }
   margin_threshold <- .select_threshold(
     annotation_margin[reference],
     if (length(swap_margin_positives)) swap_margin_positives else false_margin,
-    target_specificity, "upper"
+    target_specificity, "upper", additional_negatives = swap_margin_negatives
   )
   risk_coverage <- cbind(
     source = "observed",
@@ -487,10 +497,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     c(flagged[reference], false_margin > margin_threshold),
     c(annotation_margin[reference], false_margin)
   )
-  # Detection is validated on the simulated swaps the cutoff is tuned on, with
-  # sensitivity cross-fitted by repeat so no swap is scored by a cutoff that
-  # saw it. Without enough repeats it is in-sample; without a simulation it
-  # falls back to every wrong label.
+  # Estimate simulated sensitivity and specificity on held-out repeats where possible.
   swap_simulation <- !is.null(simulation) && any(simulation$actually_misannotated)
   if (swap_simulation) {
     swap_margins <- simulation$annotation_margin[simulation$actually_misannotated]
@@ -513,6 +520,17 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     detection_source <- "all_wrong_identities"
   }
   misannotation_metrics$sensitivity_in_sample <- misannotation_metrics$sensitivity
+  sim_negatives <- swap_margin_negatives
+  sim_negatives <- sim_negatives[is.finite(sim_negatives)]
+  misannotation_metrics$simulated_specificity_in_sample <- if (length(sim_negatives)) {
+    mean(sim_negatives <= margin_threshold)
+  } else NA_real_
+  misannotation_metrics$simulated_specificity <- if (is.null(crossfit)) {
+    misannotation_metrics$simulated_specificity_in_sample
+  } else crossfit$simulated_specificity
+  misannotation_metrics$n_simulated_negatives <- if (is.null(crossfit)) {
+    length(sim_negatives)
+  } else crossfit$n_simulated_negatives
   if (!is.null(crossfit)) {
     misannotation_metrics$sensitivity <- crossfit$sensitivity
     misannotation_metrics$false_negative_rate <- 1 - crossfit$sensitivity
@@ -606,8 +624,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     ),
     note = paste(
       "Flags samples whose top-versus-observed raw score margin exceeds a",
-      "cutoff that keeps at least the target specificity among reference",
-      "samples while maximizing sensitivity to simulated false labels;",
+      "cutoff that keeps at least the target specificity separately among",
+      "reference and unchanged simulated samples, when available, while",
+      "maximizing sensitivity to simulated false labels;",
       "not an annotation-correctness probability."
     )
   )
@@ -661,11 +680,13 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   feasibility <- NULL
   if (isTRUE(assess_feasibility)) {
     enough_known <- length(y) >= 20L
-    detection_status <- if (!enough_known) {
+    detection_status <- if (!enough_known || !swap_simulation ||
+                            !is.finite(misannotation_metrics$simulated_specificity) ||
+                            !is.finite(misannotation_metrics$sensitivity)) {
       "insufficient_evidence"
     } else if (is.finite(misannotation_metrics$sensitivity) &&
                misannotation_metrics$sensitivity >= 0.8 &&
-               misannotation_metrics$specificity >= target_specificity) {
+               misannotation_metrics$simulated_specificity >= target_specificity) {
       "appears_feasible"
     } else {
       "unreliable"
@@ -698,10 +719,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       unknown_individual_detection = unknown_status,
       warning = paste(
         "Internal estimates are exploratory: threshold selection and",
-        "performance use the same out-of-fold predictions. Thresholds and",
-        "specificity exclude confidently misassigned samples. Margin-based",
-        "flagging has no probability interpretation. Detection sensitivity",
-        "is cross-fitted across simulated-swap repeats when at least two are",
+        "performance use the same out-of-fold predictions. Reference thresholds",
+        "and specificity exclude confidently misassigned samples. Margin-based",
+        "flagging has no probability interpretation. Detection sensitivity and",
+        "simulated specificity are cross-fitted by repeat when at least two are",
         "available (see performance$misannotation_detection$source); the",
         "unknown cutoff (unless unknown_threshold_method = \"mad\") is",
         "tuned on the same simulated strangers used to estimate unknown",
@@ -809,8 +830,18 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     )
     if (!is.null(simulated_positive_margins) &&
         nrow(simulated_positive_margins)) {
+      simulated_negatives <- simulation[!simulation$actually_misannotated, ,
+                                        drop = FALSE]
+      simulated_negative_margins <- data.frame(
+        sample_id = simulated_negatives$sample_id,
+        identity = simulated_negatives$simulated_id,
+        population = rep("simulated_unchanged_negative", nrow(simulated_negatives)),
+        margin = simulated_negatives$annotation_margin,
+        stringsAsFactors = FALSE
+      )
       annotation_threshold_data <- rbind(
-        annotation_threshold_data, simulated_positive_margins
+        annotation_threshold_data, simulated_positive_margins,
+        simulated_negative_margins
       )
     } else {
       false_identity_margins$population <- "all_wrong_identity_alternatives"

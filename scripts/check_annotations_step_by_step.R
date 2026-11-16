@@ -217,10 +217,15 @@ swap_margin_positives <- if (!is.null(simulation)) {
 } else {
   numeric()
 }
+swap_margin_negatives <- if (!is.null(simulation)) {
+  simulation$annotation_margin[!simulation$actually_misannotated]
+} else {
+  numeric()
+}
 margin_threshold <- .select_threshold(
   annotation_margin[reference],
   if (length(swap_margin_positives)) swap_margin_positives else false_margin,
-  target_specificity, "upper"
+  target_specificity, "upper", additional_negatives = swap_margin_negatives
 )
 cat(sprintf("Annotation margin threshold %.4g (positives: %s)\n",
             margin_threshold,
@@ -332,6 +337,18 @@ if (swap_simulation) {
   detection_source <- "all_wrong_identities"
 }
 misannotation_metrics$sensitivity_in_sample <- misannotation_metrics$sensitivity
+sim_negatives <- if (is.null(simulation)) numeric() else
+  simulation$annotation_margin[!simulation$actually_misannotated]
+sim_negatives <- sim_negatives[is.finite(sim_negatives)]
+misannotation_metrics$simulated_specificity_in_sample <- if (length(sim_negatives)) {
+  mean(sim_negatives <= margin_threshold)
+} else NA_real_
+misannotation_metrics$simulated_specificity <- if (is.null(crossfit)) {
+  misannotation_metrics$simulated_specificity_in_sample
+} else crossfit$simulated_specificity
+misannotation_metrics$n_simulated_negatives <- if (is.null(crossfit)) {
+  length(sim_negatives)
+} else crossfit$n_simulated_negatives
 if (!is.null(crossfit)) {
   misannotation_metrics$sensitivity <- crossfit$sensitivity
   misannotation_metrics$false_negative_rate <- 1 - crossfit$sensitivity
@@ -460,11 +477,13 @@ assess_feasibility <- TRUE
 feasibility <- NULL
 if (assess_feasibility) {
   enough_known <- length(y) >= 20L
-  detection_status <- if (!enough_known) {
+  detection_status <- if (!enough_known || !swap_simulation ||
+                          !is.finite(misannotation_metrics$simulated_specificity) ||
+                          !is.finite(misannotation_metrics$sensitivity)) {
     "insufficient_evidence"
   } else if (is.finite(misannotation_metrics$sensitivity) &&
              misannotation_metrics$sensitivity >= 0.8 &&
-             misannotation_metrics$specificity >= target_specificity) {
+             misannotation_metrics$simulated_specificity >= target_specificity) {
     "appears_feasible"
   } else {
     "unreliable"

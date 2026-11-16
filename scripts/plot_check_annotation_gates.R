@@ -215,12 +215,12 @@ plot_check_annotation_gates <- function(result, file = NULL) {
     xaxt = "n", xlab = "", ylab = "Rate",
     main = paste("Gate 5: misannotation", detection_status)
   )
-  graphics::axis(1, at = 1:2, labels = c("Sensitivity", "Specificity"))
+  graphics::axis(1, at = 1:2, labels = c("Sensitivity", "Simulated specificity"))
   graphics::abline(h = c(0.8, gate$target_specificity),
                    col = c("firebrick", "darkorange"), lty = 2)
   graphics::segments(1, 0, 1, misannotation$sensitivity,
                      lwd = 8, col = "steelblue")
-  graphics::segments(2, 0, 2, misannotation$specificity,
+  graphics::segments(2, 0, 2, misannotation$simulated_specificity,
                      lwd = 8, col = "steelblue")
   graphics::mtext(
     sprintf("%s; %d repeat(s)", sub("_", " ", misannotation$source),
