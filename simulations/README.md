@@ -144,6 +144,18 @@ Both runners use the same selected rule for observed and simulated samples, and
 include non-default choices in the config name so their output files do not
 collide.
 
+Both runners also accept `mismatch_rate=held_out` or a comma-separated
+comparison such as `mismatch_rate=0.1,held_out`. The held-out fraction is
+computed over all input samples and applied to the simulation reference; it is
+not verified error prevalence. Swaps occur in whole pairs, with at least one
+pair even when the fraction is zero. Summaries record `swap_rate_target` and
+`swap_rate_actual`; the package default remains 0.1. For example:
+
+```sh
+RUN_ARGS='cv_folds=5 mismatch_rate=0.1,held_out' qsub simulations/run_gtex.pbs
+RUN_ARGS='cv_folds=5 mismatch_rate=0.1,held_out' qsub simulations/run_sims.pbs
+```
+
 ## GTEx benchmark scenarios and settings
 
 `Simulate_from_GTEX_grid.R` builds 150 base settings: tissue (6 or 12 tissues, 10
@@ -156,7 +168,9 @@ grid, so scenarios shared with earlier runs keep their numbers and seeds. Set
 subset. The runners default to 5-fold CV and
 `mismatch_repeats=3`, so detection sensitivity is cross-fitted, and to
 `min_agreement=0` (agreement gate off). `first_pass_agreement` is recorded per
-scenario; apply any cutoff to it afterwards. Finished scenarios and configs are
+scenario; apply any cutoff to it afterwards. This now also allows agreement
+below 60%, which previously stopped even when the runner set the gate to zero.
+Finished scenarios and configs are
 skipped on rerun, so use a new `out=` directory or `force=TRUE` after changing
 the package. Besides true sensitivity and specificity, the scored rows include
 `sens_gap`, `recovery_gap` and `correction_precision_gap` (reported minus true)

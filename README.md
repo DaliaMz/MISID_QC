@@ -28,9 +28,10 @@ plot_risk_coverage(results)
 
 The initial implementation uses leave-one-sample-out shrinkage LDA and raw
 score margins (top versus second, and top versus observed label). First-pass agreement
-below 75% triggers a warning, and below 60% the run stops unless
-`stop_on_low_agreement = FALSE`. A first-pass
-agreement gate (`min_agreement`, default 70%) must be met; confidently
+below 75% triggers a warning. The run stops if first-pass agreement is below
+`min_agreement` (default 60%); set it to `0` to disable the gate when studying
+low-agreement simulations. The former `stop_on_low_agreement` argument has
+been removed. Confidently
 misassigned samples are held out of the calibration reference set, but the
 models are not refit. A sample is confidently misassigned when its prediction
 disagrees with its label and its annotation margin (top versus observed label)
@@ -38,6 +39,11 @@ exceeds the `margin_coverage` quantile (default 0.025) of reference margins
 from correctly predicted samples. `holdout_reference = "all_alternatives"`
 (default) pools top-minus-each-alternative margins; `"top"` uses only
 top-minus-second margins. The label-swap simulation applies the same rule.
+Set `mismatch_rate = "held_out"` to use the first-pass held-out fraction as
+the swap rate instead of the default 0.1. This is not an estimate of the true
+error rate. Swaps are made in whole pairs, with at least one pair even when
+the held-out fraction is zero; the actual fraction can differ and is recorded
+as `calibration$mismatch_simulation$actual_rate`.
 The former `refit_clean` argument has been removed; omit it from existing calls.
 For compatibility, `calibration$dropped_individuals` is empty and
 `predictions$excluded_from_refit` is always `FALSE`.
@@ -78,7 +84,7 @@ agreement) and is not overwritten by feasibility, which is reported separately
 in `results$feasibility`. All samples, including held-out samples, are
 `suspicious` only when their annotation margin exceeds the calibrated cutoff.
 Every input sample has a row in `predictions`.
-`insufficient_evidence` appears when the agreement gate fails. Candidate
+Candidate
 corrections are emitted only when identity
 recovery on simulated misannotated samples appears feasible.
 

@@ -32,10 +32,9 @@
 #'   selects the number of stratified cross-validation folds. Fold assignment
 #'   is randomized; call `set.seed()` beforehand for reproducible results.
 #' @param min_agreement Minimum fraction of samples whose out-of-fold top
-#'   predicted identity equals the observed identity. Below this, the function
-#'   warns and returns every sample as
-#'   `"insufficient_evidence"` (no clean predictions, flags or corrections),
-#'   keeping raw scores, margins and the remaining outputs.
+#'   predicted identity equals the observed identity. If agreement is below
+#'   this value, the function stops before calibration. Defaults to 0.6;
+#'   a warning is issued when agreement is below 0.75.
 #' @param margin_coverage Quantile used to set the first-pass holdout cutoff.
 #'   The reference values are chosen by `holdout_reference`.
 #' @param holdout_reference Whether to use the top-versus-second margin
@@ -45,9 +44,12 @@
 #'   this threshold are treated as confidently misassigned and excluded from
 #'   the threshold reference set. The same choice is applied to simulated
 #'   mismatches. The original out-of-fold models are not refit after holdout.
-#' @param mismatch_rate Fraction of clean samples whose labels are swapped
-#'   pairwise in a simulation that gives known-truth agreement for the
-#'   risk-coverage curve. `NULL` or 0 disables the simulation.
+#' @param mismatch_rate Fraction of reference samples whose labels are swapped
+#'   pairwise in the simulation. `"held_out"` uses the fraction of all input
+#'   samples held out in the first pass, applied to the simulation reference
+#'   samples. Swaps are rounded to whole pairs, with at least one pair for
+#'   `"held_out"`, even when no samples were held out. The actual simulated
+#'   fraction may differ. `NULL` or numeric 0 disables the simulation.
 #' @param mismatch_repeats Number of independent label-swap simulations whose
 #'   results are pooled to tune the annotation cutoff. With at least two
 #'   repeats, detection sensitivity and simulated specificity are cross-fitted:
@@ -55,10 +57,6 @@
 #'   and unchanged samples and the reference negatives. More repeats give a less extreme
 #'   cutoff and a steadier sensitivity estimate at the cost of roughly
 #'   proportional simulation time. With 1, sensitivity is in-sample.
-#' @param stop_on_low_agreement If `TRUE` (default), the run stops with an
-#'   error when first-pass out-of-fold agreement is below 0.6, because the
-#'   calibration is then unreliable. Set to `FALSE` to proceed anyway. A
-#'   warning is always issued when first-pass agreement is below 0.75.
 #' @param diagnostics Whether to include intermediate gate data in the result.
 #'   This is intended for understanding and plotting the validation steps; it
 #'   can add substantially to the result size.
@@ -109,8 +107,7 @@
 #'   separate flag, not an `annotation_status` value. Predictions also include
 #'   the nearest-class distance and the unknown-detection score and threshold.
 #'   `predictions$annotation_status` is descriptive (flag, abstention,
-#'   agreement) and does not depend on `feasibility`;
-#'   `"insufficient_evidence"` is used when the minimum-agreement gate fails.
+#'   agreement) and does not depend on `feasibility`.
 #'   All samples, including held-out samples, are flagged as suspicious only
 #'   when their annotation margin exceeds the calibrated threshold. Every input
 #'   sample has a row.
@@ -132,7 +129,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               shrinkage = 0.1, target_specificity = 0.95,
                               assess_feasibility = TRUE,
                               progress = interactive(), cv_folds = NULL,
-                              min_agreement = 0.7, margin_coverage = 0.025,
+                              min_agreement = 0.6, margin_coverage = 0.025,
                               holdout_reference = c("all_alternatives", "top"),
                               mismatch_rate = 0.1,
                               min_accuracy = 0.9, detect_unknown = TRUE,
@@ -140,7 +137,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               unknown_mad = 3,
                               grouped_unknown_validation = FALSE,
                               unknown_stray_samples = 2L,
-                              mismatch_repeats = 3L, stop_on_low_agreement = TRUE,
+                              mismatch_repeats = 3L,
                               diagnostics = FALSE) {
   unknown_threshold_method <- match.arg(unknown_threshold_method)
   expr <- as.matrix(expr)
@@ -178,12 +175,25 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       target_specificity <= 0 || target_specificity >= 1) {
     stop("target_specificity must be a single number between 0 and 1.")
   }
+  if (!is.numeric(min_agreement) || is.complex(min_agreement) ||
+      length(min_agreement) != 1L || !is.finite(min_agreement) ||
+      min_agreement < 0 || min_agreement > 1) {
+    stop("min_agreement must be a single number between 0 and 1.")
+  }
   if (!is.numeric(margin_coverage) || length(margin_coverage) != 1L ||
       !is.finite(margin_coverage) || margin_coverage < 0 ||
       margin_coverage > 1) {
     stop("margin_coverage must be a single number between 0 and 1.")
   }
   holdout_reference <- match.arg(holdout_reference)
+  if (!is.null(mismatch_rate) &&
+      !(is.character(mismatch_rate) && length(mismatch_rate) == 1L &&
+        !is.na(mismatch_rate) && mismatch_rate == "held_out") &&
+      !(is.numeric(mismatch_rate) && !is.complex(mismatch_rate) &&
+        length(mismatch_rate) == 1L && is.finite(mismatch_rate) &&
+        mismatch_rate >= 0 && mismatch_rate <= 1)) {
+    stop('mismatch_rate must be NULL, "held_out", or a single number between 0 and 1.')
+  }
   if (!is.numeric(mismatch_repeats) || length(mismatch_repeats) != 1L ||
       !is.finite(mismatch_repeats) || mismatch_repeats < 1L ||
       mismatch_repeats != floor(mismatch_repeats)) {
@@ -199,10 +209,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
     stop("progress must be TRUE or FALSE.")
-  }
-  if (!is.logical(stop_on_low_agreement) ||
-      length(stop_on_low_agreement) != 1L || is.na(stop_on_low_agreement)) {
-    stop("stop_on_low_agreement must be TRUE or FALSE.")
   }
   if (!is.logical(diagnostics) || length(diagnostics) != 1L ||
       is.na(diagnostics)) {
@@ -272,11 +278,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       100 * oof_agreement, 100 * min_agreement
     ))
   }
-  if (oof_agreement < 0.6 && isTRUE(stop_on_low_agreement)) {
+  if (oof_agreement < min_agreement) {
     stop(sprintf(
-      paste("Run stopped because first-pass agreement (%.1f%%) is below 60%%.",
-            "To proceed anyway, set stop_on_low_agreement = FALSE."),
-      100 * oof_agreement
+      "Run stopped because first-pass agreement (%.1f%%) is below min_agreement (%.1f%%).",
+      100 * oof_agreement, 100 * min_agreement
     ), call. = FALSE)
   }
   if (oof_agreement < 0.75) {
@@ -286,15 +291,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       100 * oof_agreement
     ), call. = FALSE)
   }
-  low_agreement <- oof_agreement < min_agreement
-  if (low_agreement) {
-    warning(sprintf(
-      paste("Out-of-fold identity agreement (%.1f%%) is below the required",
-            "minimum (%.1f%%); all predictions are returned as",
-            "insufficient_evidence and thresholds are unreliable."),
-      100 * oof_agreement, 100 * min_agreement
-    ), call. = FALSE)
-  }
+  low_agreement <- FALSE
 
   top_margin <- margins$top_margin
   annotation_margin <- margins$annotation_margin
@@ -313,6 +310,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   first_pass_agreement <- oof_agreement
   held_out_ids <- rownames(x)[confidently_misassigned]
   n_samples_first_pass <- nrow(x)
+  mismatch_rate_held_out <- identical(mismatch_rate, "held_out")
+  simulation_rate <- if (mismatch_rate_held_out) {
+    length(held_out_ids) / n_samples_first_pass
+  } else mismatch_rate
   first_pass_diagnostics <- if (diagnostics) {
     data.frame(
       sample_id = rownames(x),
@@ -349,22 +350,19 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   )
   unknown <- if (!detect_unknown) {
     list(n = 0L, top_margin = numeric())
-  } else if (low_agreement) {
-    tryCatch(validate_unknown(), error = function(e) {
-      list(n = 0L, top_margin = numeric(), status = "insufficient_evidence")
-    })
   } else {
     validate_unknown()
   }
   simulation <- NULL
   clean_counts <- table(y[reference])
-  if (!low_agreement && !is.null(mismatch_rate) && mismatch_rate > 0 &&
+  if (!is.null(simulation_rate) &&
+      (simulation_rate > 0 || mismatch_rate_held_out) &&
       sum(clean_counts >= 2L) >= 2L) {
     clean <- reference & y %in% names(clean_counts)[clean_counts >= 2L]
     if (isTRUE(progress)) {
       message(sprintf(
         "Simulating label swaps (rate %.0f%%) on %d clean samples.",
-        100 * mismatch_rate, sum(clean)
+        100 * simulation_rate, sum(clean)
       ))
     }
     draws <- lapply(seq_len(mismatch_repeats), function(r) {
@@ -372,7 +370,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         message(sprintf("Label-swap simulation %d/%d.", r, mismatch_repeats))
       }
       draw <- .simulate_mismatches(
-        x[clean, , drop = FALSE], y[clean], mismatch_rate,
+        x[clean, , drop = FALSE], y[clean], simulation_rate,
         if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
         holdout_reference
       )
@@ -614,7 +612,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     dropped_individuals = character(),
     n_confidently_misassigned = sum(confidently_misassigned),
     mismatch_simulation = if (is.null(simulation)) NULL else list(
-      rate = mismatch_rate,
+      rate = simulation_rate,
+      rate_mode = if (mismatch_rate_held_out) "held_out" else "fixed",
+      actual_rate = mean(simulation$actually_misannotated),
       repeats = length(unique(simulation$repeat_id)),
       n_samples = nrow(simulation),
       n_misannotated = sum(simulation$actually_misannotated),
@@ -752,30 +752,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     ifelse(confident_prediction & predicted_id != y,
            "weak_disagreement",
            "no_evidence_of_incorrect_annotation"))))
-  if (low_agreement) {
-    # Thresholds were tuned on predictions that mostly disagree with the
-    # observed labels, so no call is trustworthy; raw scores and margins stay.
-    predictions$predicted_id_clean <- NA_character_
-    predictions$confident_prediction <- FALSE
-    predictions$suspicious <- NA
-    predictions$potential_unknown_individual <- if (detect_unknown) NA else FALSE
-    predictions$most_likely_alternative <- NA_character_
-    predictions$candidate_correction <- NA_character_
-    predictions$annotation_status <- "insufficient_evidence"
-    if (!is.null(feasibility)) {
-      feasibility$misannotation_detection <- "insufficient_evidence"
-      feasibility$identity_recovery <- "insufficient_evidence"
-      if (detect_unknown) {
-        feasibility$unknown_individual_detection <- "insufficient_evidence"
-      }
-      feasibility$warning <- paste(
-        sprintf("Out-of-fold agreement (%.1f%%) is below min_agreement (%.1f%%);",
-                100 * first_pass_agreement, 100 * min_agreement),
-        "all samples are reported as insufficient_evidence."
-      )
-    }
-  }
-
   result <- list(
     predictions = predictions,
     identity_scores = oof_scores,

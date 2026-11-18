@@ -53,7 +53,7 @@ id_col <- "individual_id"
 shrinkage <- 0.1
 target_specificity <- 0.95
 cv_folds <- NULL            # NULL = leave-one-sample-out
-min_agreement <- 0.7
+min_agreement <- 0.6
 margin_coverage <- 0.025
 holdout_reference <- "all_alternatives" # or "top"
 mismatch_rate <- 0.1
@@ -64,7 +64,6 @@ unknown_threshold_method <- "simulated"  # or "mad"
 unknown_mad <- 3          # only used with "mad"
 grouped_unknown_validation <- FALSE
 unknown_stray_samples <- 2L
-stop_on_low_agreement <- TRUE
 progress <- TRUE
 set.seed(123)
 
@@ -127,17 +126,16 @@ margins <- .score_margins(oof_scores, y)
 predicted_id <- margins$predicted
 correct_identity <- margins$correct
 oof_agreement <- mean(correct_identity)
-if (oof_agreement < 0.6 && stop_on_low_agreement) {
-  stop(sprintf(paste("Run stopped because first-pass agreement (%.1f%%) is",
-                     "below 60%%. To proceed anyway, set",
-                     "stop_on_low_agreement = FALSE."), 100 * oof_agreement))
+if (oof_agreement < min_agreement) {
+  stop(sprintf("Run stopped because first-pass agreement (%.1f%%) is below min_agreement (%.1f%%).",
+               100 * oof_agreement, 100 * min_agreement))
 }
 if (oof_agreement < 0.75) {
   warning(sprintf(paste("First-pass agreement (%.1f%%) is below 75%%;",
                         "calibration may be off and results may be",
                         "unreliable."), 100 * oof_agreement))
 }
-low_agreement <- oof_agreement < min_agreement
+low_agreement <- FALSE
 top_margin <- margins$top_margin
 annotation_margin <- margins$annotation_margin
 cat(sprintf("First-pass agreement %.3f (min %.3f) -> low_agreement = %s\n",
@@ -181,10 +179,6 @@ validate_unknown <- function() .unknown_validation(
 )
 unknown <- if (!detect_unknown) {
   list(n = 0L, top_margin = numeric())
-} else if (low_agreement) {
-  tryCatch(validate_unknown(), error = function(e) {
-    list(n = 0L, top_margin = numeric(), status = "insufficient_evidence")
-  })
 } else {
   validate_unknown()
 }
@@ -192,13 +186,17 @@ str(unknown)
 
 # ---- 9. Simulated label swaps ----------------------------------------------
 simulation <- NULL
+simulation_rate <- if (identical(mismatch_rate, "held_out")) {
+  length(held_out_ids) / nrow(first_pass_all)
+} else mismatch_rate
 clean_counts <- table(y[reference])
-if (!low_agreement && !is.null(mismatch_rate) && mismatch_rate > 0 &&
+if (!is.null(simulation_rate) &&
+    (simulation_rate > 0 || identical(mismatch_rate, "held_out")) &&
     sum(clean_counts >= 2L) >= 2L) {
   clean <- reference & y %in% names(clean_counts)[clean_counts >= 2L]
   draws <- lapply(seq_len(mismatch_repeats), function(r) {
     draw <- .simulate_mismatches(
-      x[clean, , drop = FALSE], y[clean], mismatch_rate,
+      x[clean, , drop = FALSE], y[clean], simulation_rate,
       if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
       holdout_reference
     )
@@ -423,7 +421,9 @@ calibration <- list(
   dropped_individuals = character(),
   n_confidently_misassigned = sum(confidently_misassigned),
   mismatch_simulation = if (is.null(simulation)) NULL else list(
-    rate = mismatch_rate,
+    rate = simulation_rate,
+    rate_mode = if (identical(mismatch_rate, "held_out")) "held_out" else "fixed",
+    actual_rate = mean(simulation$actually_misannotated),
     repeats = length(unique(simulation$repeat_id)),
     n_samples = nrow(simulation),
     n_misannotated = sum(simulation$actually_misannotated),
@@ -534,23 +534,6 @@ predictions$annotation_status <- ifelse(
   ifelse(confident_prediction & predicted_id != y, "weak_disagreement",
          "no_evidence_of_incorrect_annotation")))
 )
-
-# ---- 20. Low-agreement override --------------------------------------------
-if (low_agreement) {
-  predictions$predicted_id_clean <- NA_character_
-  predictions$confident_prediction <- FALSE
-  predictions$suspicious <- NA
-  predictions$potential_unknown_individual <- if (detect_unknown) NA else FALSE
-  predictions$most_likely_alternative <- NA_character_
-  predictions$candidate_correction <- NA_character_
-  predictions$annotation_status <- "insufficient_evidence"
-  if (!is.null(feasibility)) {
-    feasibility$misannotation_detection <- "insufficient_evidence"
-    feasibility$identity_recovery <- "insufficient_evidence"
-    if (detect_unknown) feasibility$unknown_individual_detection <-
-      "insufficient_evidence"
-  }
-}
 
 # ---- 22. Final result -------------------------------------------------------
 result <- list(

@@ -5,14 +5,14 @@
 check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
-  min_agreement = 0.7, margin_coverage = 0.025,
+  min_agreement = 0.6, margin_coverage = 0.025,
   holdout_reference = c("all_alternatives", "top"),
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
   unknown_threshold_method = c("simulated", "mad"),
   unknown_mad = 3,
   grouped_unknown_validation = FALSE,
   unknown_stray_samples = 2L, mismatch_repeats = 3L,
-  stop_on_low_agreement = TRUE, diagnostics = FALSE)
+  diagnostics = FALSE)
 }
 \arguments{
 \item{expr}{Numeric expression matrix, features by samples, with unique
@@ -33,10 +33,9 @@ otherwise, an integer from 2 to the smallest individual sample count selects
 the number of stratified cross-validation folds. Fold assignment is
 randomized; call \code{set.seed()} beforehand for reproducible results.}
 \item{min_agreement}{Minimum fraction of samples whose out-of-fold top
-predicted identity equals the observed identity. Below this, the function
-warns and returns every sample as
-\code{"insufficient_evidence"} (no clean predictions, flags or corrections),
-keeping raw scores, margins and the remaining outputs.}
+predicted identity equals the observed identity. If agreement is below this
+value, the function stops before calibration. Defaults to 0.6; a warning is
+issued when agreement is below 0.75.}
 \item{margin_coverage}{Quantile used to set the first-pass holdout cutoff.
 The reference values are chosen by \code{holdout_reference}.}
 \item{holdout_reference}{Whether to use the top-versus-second margin
@@ -46,9 +45,12 @@ predicted incorrectly with an annotation margin (top versus observed score)
 above this threshold are treated as confidently misassigned and excluded from
 the threshold reference set. The same choice is applied to simulated mismatches.
 The original out-of-fold models are not refit after holdout.}
-\item{mismatch_rate}{Fraction of clean samples whose labels are swapped
-pairwise in a simulation that gives known-truth agreement for the
-risk-coverage curve. \code{NULL} or 0 disables the simulation.}
+\item{mismatch_rate}{Fraction of reference samples whose labels are swapped
+pairwise. \code{"held_out"} uses the fraction of all input samples held out in
+the first pass, applied to the simulation reference samples. Swaps are rounded
+to whole pairs, with at least one pair for \code{"held_out"}, even when no
+samples were held out. The actual simulated fraction may differ.
+\code{NULL} or numeric 0 disables the simulation.}
 \item{mismatch_repeats}{Number of independent label-swap simulations whose results
 are pooled to tune the annotation cutoff. With at least two repeats, detection
 sensitivity and simulated specificity are cross-fitted: each repeat is scored
@@ -56,10 +58,6 @@ with a cutoff tuned on the other repeats' swapped and unchanged samples and the
 reference negatives. More repeats give a less extreme cutoff and a steadier
 sensitivity estimate at the cost of roughly proportional simulation time. With 1,
 sensitivity is in-sample.}
-\item{stop_on_low_agreement}{If \code{TRUE} (default), the run stops with an
-error when first-pass out-of-fold agreement is below 0.6, because the
-calibration is then unreliable. Set to \code{FALSE} to proceed anyway. A
-warning is always issued when first-pass agreement is below 0.75.}
 \item{diagnostics}{Whether to include intermediate gate data in the result.
 This is intended for understanding and plotting the validation steps; it can
 add substantially to the result size.}
@@ -110,8 +108,7 @@ out as confidently misassigned, from the first pass), \code{feasibility}, and
 separate flag, not an \code{annotation_status} value. Predictions also include
 the nearest-class distance and the unknown-detection score and threshold.
 \code{predictions$annotation_status} is descriptive (flag, abstention,
-agreement) and does not depend on \code{feasibility};
-\code{"insufficient_evidence"} is used when the minimum-agreement gate fails.
+agreement) and does not depend on \code{feasibility}.
 All samples, including held-out samples, are flagged as suspicious only when
 their annotation margin exceeds the calibrated threshold. Every input sample has a row.
 \code{performance$misannotation_detection} includes simulated-swap sensitivity,

@@ -259,6 +259,33 @@ stopifnot(inherits(
 ))
 
 stopifnot(result$calibration$mismatch_simulation$repeats == 3L)
+stopifnot(result$calibration$mismatch_simulation$rate == 0.1)
+for (disabled_rate in list(0, NULL)) {
+  disabled <- check_annotations(
+    expression, metadata, "sample", "individual", progress = FALSE,
+    mismatch_rate = disabled_rate, detect_unknown = FALSE
+  )
+  stopifnot(is.null(disabled$mismatch_simulation),
+            is.null(disabled$calibration$mismatch_simulation))
+}
+set.seed(12)
+held_zero <- check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  mismatch_rate = "held_out", mismatch_repeats = 1, detect_unknown = FALSE
+)
+stopifnot(held_zero$held_out$n_confidently_misassigned == 0L,
+          held_zero$calibration$mismatch_simulation$rate == 0,
+          held_zero$calibration$mismatch_simulation$rate_mode == "held_out",
+          sum(held_zero$mismatch_simulation$actually_misannotated) == 2L,
+          held_zero$calibration$mismatch_simulation$actual_rate ==
+            mean(held_zero$mismatch_simulation$actually_misannotated))
+for (invalid in list("invalid", NA_character_, -0.1, 1.1, NA_real_,
+                     c(0.1, 0.2), numeric())) {
+  stopifnot(inherits(try(
+    check_annotations(expression, metadata, "sample", "individual",
+                      progress = FALSE, mismatch_rate = invalid),
+    silent = TRUE), "try-error"))
+}
 single <- check_annotations(expression, metadata, "sample", "individual",
                             progress = FALSE, mismatch_repeats = 1L)
 stopifnot(single$calibration$mismatch_simulation$repeats == 1L)
@@ -269,25 +296,62 @@ stopifnot(inherits(
   "try-error"
 ))
 
-low <- suppressWarnings(check_annotations(
-  expression, metadata, "sample", "individual", progress = FALSE,
-  min_agreement = 1.01, stop_on_low_agreement = FALSE
-))
-stopifnot(low$calibration$low_agreement)
-stopifnot(all(low$predictions$annotation_status == "insufficient_evidence"))
-stopifnot(all(is.na(low$predictions$predicted_id_clean)))
-stopifnot(!anyNA(low$predictions$predicted_id))
 scrambled <- metadata
 scrambled$individual <- rep(c("donor_a", "donor_b", "donor_c"), 4)
-stopifnot(inherits(try(
+low <- suppressWarnings(check_annotations(
+  expression, scrambled, "sample", "individual", progress = FALSE,
+  min_agreement = 0, mismatch_rate = 0, detect_unknown = FALSE
+))
+agreement <- low$calibration$first_pass_agreement
+stopifnot(agreement < 0.6, !low$calibration$low_agreement)
+stopped <- tryCatch(
   check_annotations(expression, scrambled, "sample", "individual",
-                    progress = FALSE),
+                    progress = FALSE, mismatch_rate = 0, detect_unknown = FALSE),
+  error = function(e) e
+)
+stopifnot(inherits(stopped, "error"),
+          grepl("below min_agreement \\(60.0%\\)", conditionMessage(stopped)))
+at_boundary <- suppressWarnings(check_annotations(
+  expression, scrambled, "sample", "individual", progress = FALSE,
+  min_agreement = agreement, mismatch_rate = 0, detect_unknown = FALSE
+))
+stopifnot(at_boundary$calibration$first_pass_agreement == agreement)
+stopped <- tryCatch(
+  check_annotations(expression, scrambled, "sample", "individual",
+                    progress = FALSE, min_agreement = 0.9,
+                    mismatch_rate = 0, detect_unknown = FALSE),
+  error = function(e) e
+)
+stopifnot(inherits(stopped, "error"),
+          grepl("below min_agreement \\(90.0%\\)", conditionMessage(stopped)))
+set.seed(2)
+boundary_expr <- matrix(rnorm(40), nrow = 4)
+colnames(boundary_expr) <- paste0("boundary_", seq_len(10))
+boundary_meta <- data.frame(sample = colnames(boundary_expr),
+                            individual = rep(c("a", "b"), each = 5))
+boundary <- suppressWarnings(check_annotations(
+  boundary_expr, boundary_meta, "sample", "individual", progress = FALSE,
+  mismatch_rate = 0, detect_unknown = FALSE
+))
+stopifnot(boundary$calibration$first_pass_agreement == 0.6)
+warning_at_boundary <- tryCatch(
+  check_annotations(boundary_expr, boundary_meta, "sample", "individual",
+                    progress = FALSE, mismatch_rate = 0, detect_unknown = FALSE),
+  warning = function(w) w
+)
+stopifnot(inherits(warning_at_boundary, "warning"),
+          grepl("below 75%", conditionMessage(warning_at_boundary)))
+stopifnot(inherits(try(
+  check_annotations(boundary_expr, boundary_meta, "sample", "individual",
+                    progress = FALSE, min_agreement = 0.61,
+                    mismatch_rate = 0, detect_unknown = FALSE),
   silent = TRUE), "try-error"))
-stopifnot(inherits(tryCatch(
-  check_annotations(expression, metadata, "sample", "individual",
-                    progress = FALSE, min_agreement = 1.01,
-                    stop_on_low_agreement = FALSE),
-  warning = function(w) w), "warning"))
+for (invalid in list(-0.1, 1.01, NA_real_, Inf, numeric(), c(0, 1))) {
+  stopifnot(inherits(try(
+    check_annotations(expression, metadata, "sample", "individual",
+                      progress = FALSE, min_agreement = invalid),
+    silent = TRUE), "try-error"))
+}
 
 # Held-out samples remain scored and use the same cutoff as every other sample.
 set.seed(3)
@@ -308,6 +372,27 @@ held_result <- check_annotations(
   mismatch_repeats = 2, margin_coverage = 0, detect_unknown = FALSE
 )
 dp <- held_result$predictions
+set.seed(4)
+held_rate_result <- check_annotations(
+  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+  "individual", cv_folds = NULL, min_agreement = 0, progress = FALSE,
+  mismatch_repeats = 2, margin_coverage = 0, detect_unknown = FALSE,
+  mismatch_rate = "held_out"
+)
+held_rate <- held_rate_result$held_out$fraction
+stopifnot(held_rate > 0,
+          held_rate_result$calibration$mismatch_simulation$rate == held_rate,
+          held_rate_result$calibration$mismatch_simulation$actual_rate ==
+            mean(held_rate_result$mismatch_simulation$actually_misannotated))
+set.seed(4)
+fixed_rate_result <- check_annotations(
+  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+  "individual", cv_folds = NULL, min_agreement = 0, progress = FALSE,
+  mismatch_repeats = 2, margin_coverage = 0, detect_unknown = FALSE,
+  mismatch_rate = held_rate
+)
+stopifnot(identical(held_rate_result$mismatch_simulation,
+                    fixed_rate_result$mismatch_simulation))
 stopifnot(identical(dp$sample_id, colnames(X)))
 stopifnot(!("refit_clean" %in% names(formals(check_annotations))))
 stopifnot(all(c("nearest_class_distance", "unknown_detection_score",

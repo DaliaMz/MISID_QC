@@ -37,6 +37,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 #   sbatch --export=ALL,RUN_ARGS="cv_folds=5 mismatch_repeats=1,3,5 subset=rep==1" simulations/run_sims.sh
 #   sbatch --export=ALL,RUN_ARGS="cv_folds=5 target_specificity=0.9,0.95,0.99 subset=rep==1" simulations/run_sims.sh
 #   sbatch --export=ALL,RUN_ARGS="cv_folds=loo subset=rep==1" simulations/run_sims.sh
+#   RUN_ARGS="cv_folds=5 mismatch_rate=0.1,held_out" sbatch simulations/run_sims.sh
 # (no spaces or quotes inside RUN_ARGS values)
 RUN_ARGS="${RUN_ARGS:-cv_folds=5}"
 

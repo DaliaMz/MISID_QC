@@ -51,7 +51,7 @@ for (file in c("R/lda.R", "R/validation.R", "R/check_annotations.R")) {
 set.seed(42)
 result <- suppressWarnings(synthetic$check_annotations(
   t(generated$X), as.data.frame(generated$meta), "sample", "label_observed",
-  progress = FALSE, min_agreement = 0, stop_on_low_agreement = FALSE,
+  progress = FALSE, min_agreement = 0,
   mismatch_rate = 0, detect_unknown = TRUE
 ))
 stopifnot(nrow(result$predictions) == nrow(generated$meta),

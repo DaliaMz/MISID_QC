@@ -7,10 +7,10 @@
 #
 # Optional arguments:
 #   out=simulations/results/gtex_diagnostics
-#   n_features=2000 cv_folds=5 mismatch_repeats=1
+#   n_features=2000 cv_folds=5 mismatch_repeats=1 mismatch_rate=0.1 (or held_out)
 #   margin_coverage=0.025 target_specificity=0.95
 #   holdout_reference=all_alternatives (or top)
-#   min_agreement=0.7 min_accuracy=0.9 seed=123
+#   min_agreement=0.6 min_accuracy=0.9 seed=123
 
 args <- commandArgs(trailingOnly = TRUE)
 opt <- list(
@@ -21,10 +21,11 @@ opt <- list(
   n_features = "2000",
   cv_folds = "5",
   mismatch_repeats = "1",
+  mismatch_rate = "0.1",
   margin_coverage = "0.025",
   holdout_reference = "all_alternatives",
   target_specificity = "0.95",
-  min_agreement = "0.7",
+  min_agreement = "0.6",
   min_accuracy = "0.9",
   seed = ""
 )
@@ -140,6 +141,8 @@ result <- check_annotations_fun(
   id_col = "label_observed",
   cv_folds = cv_folds,
   mismatch_repeats = repeats,
+  mismatch_rate = if (opt$mismatch_rate == "held_out") "held_out" else
+    as.numeric(opt$mismatch_rate),
   margin_coverage = as.numeric(opt$margin_coverage),
   holdout_reference = opt$holdout_reference,
   target_specificity = as.numeric(opt$target_specificity),
@@ -170,6 +173,7 @@ saveRDS(
       n_features = length(selected),
       cv_folds = cv_folds,
       mismatch_repeats = repeats,
+      mismatch_rate = opt$mismatch_rate,
       margin_coverage = as.numeric(opt$margin_coverage),
       holdout_reference = opt$holdout_reference,
       seed = seed

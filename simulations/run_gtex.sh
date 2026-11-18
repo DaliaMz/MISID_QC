@@ -34,6 +34,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 # Extra runner arguments, e.g.
 #   sbatch --export=ALL,RUN_ARGS="cv_folds=5 mismatch_repeats=3 margin_coverage=0.01,0.025,0.05 subset=rep==1" simulations/run_gtex.sh
 #   sbatch --export=ALL,RUN_ARGS="cv_folds=loo subset=rep==1" simulations/run_gtex.sh
+#   RUN_ARGS="cv_folds=5 mismatch_rate=0.1,held_out" sbatch simulations/run_gtex.sh
 # (no spaces or quotes inside RUN_ARGS values)
 RUN_ARGS="${RUN_ARGS:-cv_folds=5}"
 

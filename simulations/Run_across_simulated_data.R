@@ -21,11 +21,12 @@
 #   rescore_unknown TRUE with combine=TRUE to score saved dirty results again
 #   subset     data.table expression on the scenario parameters, e.g. "rep == 1"
 #   scenarios  R expression for scenario numbers, e.g. 1:20
-#   cv_folds, mismatch_repeats, target_specificity, margin_coverage,
+#   cv_folds, mismatch_repeats, mismatch_rate, target_specificity, margin_coverage,
 #   holdout_reference
 #              comma-separated values to compare; every combination is run, e.g.
 #              cv_folds=5,loo mismatch_repeats=1,3 target_specificity=0.9,0.95,0.99
 #              margin_coverage=0.01,0.025,0.05
+#              mismatch_rate=0.1,held_out
 #              holdout_reference=all_alternatives,top
 #              ("loo" = leave-one-out). Defaults: 5, 3, 0.95, 0.025
 #   detect_unknown TRUE/FALSE; comma-separated values to compare (default FALSE)
@@ -53,7 +54,7 @@ opt <- list(input = "simulations/results/simulated_datasets_v2.rds",
             task_id = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), n_tasks = "1",
             combine = "FALSE", rescore_unknown = "FALSE",
             cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
-            margin_coverage = "0.025",
+            margin_coverage = "0.025", mismatch_rate = "0.1",
             holdout_reference = "all_alternatives",
             detect_unknown = "FALSE",
             min_agreement = "0", force = "FALSE")
@@ -69,16 +70,28 @@ for (a in args[grepl("=", args)]) {
 # "loo" for leave-one-sample-out (cv_folds = NULL in the package). A number
 # is capped at the smallest observed label count of the scenario.
 as_vals <- function(x) strsplit(x, ",", fixed = TRUE)[[1]]
+mismatch_rates <- as_vals(opt$mismatch_rate)
+numeric_rates <- suppressWarnings(as.numeric(mismatch_rates))
+if (!length(mismatch_rates) || any(!nzchar(mismatch_rates)) ||
+    any(mismatch_rates != "held_out" &
+        (is.na(numeric_rates) | !is.finite(numeric_rates) |
+         numeric_rates < 0 | numeric_rates > 1))) {
+  stop('mismatch_rate must contain "held_out" or numbers between 0 and 1.')
+}
+mismatch_rates[mismatch_rates != "held_out"] <-
+  as.character(numeric_rates[mismatch_rates != "held_out"])
 configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               mismatch_repeats = as.integer(as_vals(opt$mismatch_repeats)),
+              mismatch_rate = unique(mismatch_rates),
               target_specificity = as.numeric(as_vals(opt$target_specificity)),
               margin_coverage = as.numeric(as_vals(opt$margin_coverage)),
               holdout_reference = as_vals(opt$holdout_reference),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
               sorted = FALSE)
 # The suffix distinguishes dual calibration and verdicts from historical runs.
-          configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s_dualcal_simspec", cv_folds, mismatch_repeats,
+configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s_dualcal_simspec", cv_folds, mismatch_repeats,
                          target_specificity,
+                         ifelse(mismatch_rate == "0.1", "", paste0("_swap", mismatch_rate)),
                          ifelse(margin_coverage == 0.025, "", paste0("_mc", margin_coverage)),
                          ifelse(holdout_reference == "all_alternatives", "",
                                 paste0("_hr", holdout_reference)),
@@ -134,6 +147,8 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
     status = if (low) "low_agreement" else "ok",
     n_samples = nrow(p), n_labels = length(unique(p$observed_id)),
     n_misid = sum(bad),
+    swap_rate_target = or_na(r$calibration$mismatch_simulation$rate),
+    swap_rate_actual = or_na(r$calibration$mismatch_simulation$actual_rate),
     first_pass_agreement = r$calibration$first_pass_agreement,
     # separation: how well the raw annotation margin ranks real mislabels
     auroc_annotation_margin = auroc(p$annotation_score_margin, bad),
@@ -202,7 +217,9 @@ run_config <- function(sim, id, cfg, meta, X, md) {
   warn <- character()
   set.seed(sim$params$seed)   # same draws for every config of a scenario
   t0 <- Sys.time()
-  check_args <- list(detect_unknown = cfg$detect_unknown,
+  rate <- if (cfg$mismatch_rate == "held_out") "held_out" else
+    as.numeric(cfg$mismatch_rate)
+  check_args <- list(detect_unknown = cfg$detect_unknown, mismatch_rate = rate,
                      min_agreement = as.numeric(opt$min_agreement))
   args <- c(list(expr = X, metadata = md, sample_col = "sample", id_col = "label",
                  cv_folds = folds, progress = FALSE,

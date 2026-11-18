@@ -23,6 +23,7 @@ export N_TASKS=60
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
 # Compare detection modes with: RUN_ARGS='cv_folds=5 detect_unknown=TRUE,FALSE' qsub simulations/run_sims.pbs
+# Compare swap rates with: RUN_ARGS='cv_folds=5 mismatch_rate=0.1,held_out' qsub simulations/run_sims.pbs
 # RUN_ARGS replaces the default entirely.
 RUN_ARGS="${RUN_ARGS:-cv_folds=5}"
 
