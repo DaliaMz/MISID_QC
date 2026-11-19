@@ -115,7 +115,11 @@ their annotation margin exceeds the calibrated threshold. Every input sample has
 \code{specificity} on the original reference samples. The detection verdict
 uses simulated sensitivity and simulated specificity; without simulated
 specificity it is \code{"insufficient_evidence"}. With one repeat both rates
-are in-sample. Precision, accuracy and ranking metrics in that table use the
+are in-sample. The verdict is \code{"appears_feasible"} when sensitivity
+reaches 80\% and specificity reaches \code{target_specificity},
+\code{"unreliable"} when either falls more than 10 percentage points short,
+and \code{"below_target"} for smaller shortfalls. These verdicts do not change
+sample flags or candidate corrections. Precision, accuracy and ranking metrics in that table use the
 reference negatives and final cutoff.
 \code{performance$estimated_detection_errors} estimates misannotation prevalence
 from the observed suspicious-flag fraction and simulated swap sensitivity and

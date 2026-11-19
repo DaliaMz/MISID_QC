@@ -116,6 +116,10 @@
 #'   on the original reference samples. The detection verdict uses simulated
 #'   sensitivity and simulated specificity; without simulated specificity it
 #'   is `"insufficient_evidence"`. With one repeat both rates are in-sample.
+#'   It is `"appears_feasible"` if sensitivity reaches 80% and specificity
+#'   reaches `target_specificity`; `"unreliable"` if either misses its target
+#'   by more than 10 percentage points; otherwise it is `"below_target"`.
+#'   These verdicts do not change sample flags or candidate corrections.
 #'   Precision, accuracy and ranking metrics in that table use the reference
 #'   negatives and final cutoff.
 #'   `performance$estimated_detection_errors` estimates misannotation
@@ -678,17 +682,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   feasibility <- NULL
   if (isTRUE(assess_feasibility)) {
     enough_known <- length(y) >= 20L
-    detection_status <- if (!enough_known || !swap_simulation ||
-                            !is.finite(misannotation_metrics$simulated_specificity) ||
-                            !is.finite(misannotation_metrics$sensitivity)) {
-      "insufficient_evidence"
-    } else if (is.finite(misannotation_metrics$sensitivity) &&
-               misannotation_metrics$sensitivity >= 0.8 &&
-               misannotation_metrics$simulated_specificity >= target_specificity) {
-      "appears_feasible"
-    } else {
-      "unreliable"
-    }
+    detection_status <- .detection_verdict(
+      misannotation_metrics$sensitivity, misannotation_metrics$simulated_specificity,
+      target_specificity, enough_known, swap_simulation
+    )
     recovery_status <- if (!enough_known || !swap_simulation ||
                            correction_threshold$n_eligible == 0L) {
       "insufficient_evidence"

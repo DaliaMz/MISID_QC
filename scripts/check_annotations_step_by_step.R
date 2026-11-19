@@ -457,17 +457,10 @@ assess_feasibility <- TRUE
 feasibility <- NULL
 if (assess_feasibility) {
   enough_known <- length(y) >= 20L
-  detection_status <- if (!enough_known || !swap_simulation ||
-                          !is.finite(misannotation_metrics$simulated_specificity) ||
-                          !is.finite(misannotation_metrics$sensitivity)) {
-    "insufficient_evidence"
-  } else if (is.finite(misannotation_metrics$sensitivity) &&
-             misannotation_metrics$sensitivity >= 0.8 &&
-             misannotation_metrics$simulated_specificity >= target_specificity) {
-    "appears_feasible"
-  } else {
-    "unreliable"
-  }
+  detection_status <- .detection_verdict(
+    misannotation_metrics$sensitivity, misannotation_metrics$simulated_specificity,
+    target_specificity, enough_known, swap_simulation
+  )
   recovery_status <- if (!enough_known || !swap_simulation ||
                          correction_threshold$n_eligible == 0L) {
     "insufficient_evidence"

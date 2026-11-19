@@ -89,7 +89,7 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
               sorted = FALSE)
 # The suffix distinguishes dual calibration and verdicts from historical runs.
-configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s_dualcal_simspec_corrcal_nogeneral", cv_folds, mismatch_repeats,
+configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s_dualcal_simspec_corrcal_nogeneral_verdict10", cv_folds, mismatch_repeats,
                          target_specificity,
                          ifelse(mismatch_rate == "0.1", "", paste0("_swap", mismatch_rate)),
                          ifelse(margin_coverage == 0.025, "", paste0("_mc", margin_coverage)),
@@ -169,7 +169,8 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
     sens_gap = rep_m$sensitivity - sens, spec_gap = rep_m$simulated_specificity - spec,
     verdict = verdict,
     # Sensitivity is undefined for clean scenarios, so score those on specificity.
-    verdict_correct = if (low) NA else (verdict == "appears_feasible") ==
+    verdict_correct = if (low || verdict %in% c("below_target", "insufficient_evidence")) NA else
+      (verdict == "appears_feasible") ==
       true_detection_feasible,
     recovery_verdict = r$feasibility$identity_recovery,
     recovery_verdict_correct = if (low || is.na(correction_reference_accuracy) ||

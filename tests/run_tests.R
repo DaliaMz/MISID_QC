@@ -132,6 +132,20 @@ stopifnot(result$performance$misannotation_detection$source %in%
             c("simulated_swaps_cross_fitted", "simulated_swaps_in_sample"))
 stopifnot(result$performance$misannotation_detection$n_repeats_validated <= 3L)
 
+detection_verdict <- SampleAnnotationLikelihood:::.detection_verdict
+stopifnot(
+  detection_verdict(0.8, 0.995, 0.995, TRUE, TRUE) == "appears_feasible",
+  detection_verdict(0.907, 0.994, 0.995, TRUE, TRUE) == "below_target",
+  detection_verdict(0.7, 0.995, 0.995, TRUE, TRUE) == "below_target",
+  detection_verdict(0.8, 0.895, 0.995, TRUE, TRUE) == "below_target",
+  detection_verdict(0.699, 0.995, 0.995, TRUE, TRUE) == "unreliable",
+  detection_verdict(0.8, 0.894, 0.995, TRUE, TRUE) == "unreliable",
+  detection_verdict(0.1, 0.95, 0.95, TRUE, TRUE) == "unreliable",
+  detection_verdict(NA_real_, 0.95, 0.95, TRUE, TRUE) == "insufficient_evidence",
+  detection_verdict(0.9, 0.95, 0.95, FALSE, TRUE) == "insufficient_evidence",
+  detection_verdict(0.9, 0.95, 0.95, TRUE, FALSE) == "insufficient_evidence"
+)
+
 estimate_errors <- SampleAnnotationLikelihood:::.estimate_detection_errors
 estimate <- estimate_errors(c(rep(TRUE, 12), rep(FALSE, 88)), 0.8, 0.95,
                             "simulated_swaps_cross_fitted")
@@ -274,6 +288,47 @@ unchanged <- data.frame(top_margin = c(1, 2),
                         agreement_simulated = TRUE, agreement_real = TRUE)
 stopifnot(all(SampleAnnotationLikelihood:::.report_recovery_curves(unchanged)$group ==
                 "All simulated samples"))
+
+summary_fixture <- diagnostic_result
+summary_fixture$thresholds$annotation_margin <- 1
+summary_fixture$thresholds$target_specificity <- 0.995
+summary_fixture$mismatch_simulation <- data.frame(
+  annotation_margin = c(2, 0, 0, 1, 2),
+  actually_misannotated = c(TRUE, TRUE, FALSE, FALSE, FALSE)
+)
+summary_fixture$diagnostics$annotation_threshold <- data.frame(
+  population = c("reference_negative", "reference_negative"), margin = c(0, 1)
+)
+summary_fixture$performance$misannotation_detection$sensitivity <- 0.907
+summary_fixture$performance$misannotation_detection$simulated_specificity <- 0.994
+summary_fixture$performance$misannotation_detection$source <- "simulated_swaps_cross_fitted"
+summary_fixture$performance$misannotation_detection$n_repeats_validated <- 3L
+summary_fixture$performance$estimated_detection_errors <- estimate_errors(
+  c(rep(TRUE, 12), rep(FALSE, 88)), 0.8, 0.95, "simulated_swaps_cross_fitted"
+)
+summary_lines <- SampleAnnotationLikelihood:::.report_detection_summary(summary_fixture)
+stopifnot(any(grepl("sensitivity 80%; specificity 99.50%", summary_lines, fixed = TRUE)),
+          any(grepl("sensitivity 50.00% (swapped n=2)", summary_lines, fixed = TRUE)),
+          any(grepl("simulated specificity 66.67% (unchanged n=3); reference specificity 100.00%",
+                    summary_lines, fixed = TRUE)),
+          any(grepl("Cross-simulation (3 held-out repeats): sensitivity 90.70%; simulated specificity 99.40%",
+                    summary_lines, fixed = TRUE)),
+          any(grepl("Estimated misannotation rate:", summary_lines, fixed = TRUE)),
+          any(grepl("Projected false positives:", summary_lines, fixed = TRUE)),
+          any(grepl("Projected missed misannotations:", summary_lines, fixed = TRUE)),
+          any(grepl("not confidence intervals", summary_lines, fixed = TRUE)))
+summary_fixture$mismatch_simulation <- NULL
+summary_fixture$diagnostics <- NULL
+summary_fixture$performance$misannotation_detection$source <- "all_wrong_identities"
+summary_fixture$performance$estimated_detection_errors <- NULL
+summary_lines <- SampleAnnotationLikelihood:::.report_detection_summary(summary_fixture)
+stopifnot(any(grepl("simulated swaps unavailable", summary_lines, fixed = TRUE)),
+          any(grepl("Estimated detection errors unavailable", summary_lines, fixed = TRUE)),
+          any(grepl("reference specificity not available", summary_lines, fixed = TRUE)))
+summary_fixture$performance$misannotation_detection$source <- "simulated_swaps_in_sample"
+stopifnot(any(grepl("cross-fitting unavailable",
+                    SampleAnnotationLikelihood:::.report_detection_summary(summary_fixture),
+                    fixed = TRUE)))
 
 report_file <- tempfile(fileext = ".pdf")
 stopifnot(identical(annotation_report(diagnostic_result, report_file), report_file))
@@ -575,7 +630,10 @@ stopifnot(identical(held_result$feasibility$misannotation_detection,
                     if (metrics$sensitivity >= 0.8 &&
                         metrics$simulated_specificity >= 0.95) {
                       "appears_feasible"
-                    } else "unreliable"))
+                    } else if (metrics$sensitivity < 0.7 - 16 * .Machine$double.eps ||
+                               metrics$simulated_specificity < 0.85 - 16 * .Machine$double.eps) {
+                      "unreliable"
+                    } else "below_target"))
 set.seed(2)
 single_held <- check_annotations(
   X, data.frame(sample = colnames(X), individual = obs_ids), "sample",

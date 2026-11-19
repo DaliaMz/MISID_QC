@@ -60,6 +60,52 @@ utils::globalVariables(c("x", "y", "rate", "metric", "group", "held"))
         curve(eligible, "Swaps and unchanged disagreements"))
 }
 
+.report_detection_summary <- function(result) {
+  sim <- result$mismatch_simulation
+  det <- result$performance$misannotation_detection
+  cutoff <- result$thresholds$annotation_margin
+  positives <- if (is.null(sim)) numeric() else
+    sim$annotation_margin[sim$actually_misannotated]
+  negatives <- if (is.null(sim)) numeric() else
+    sim$annotation_margin[!sim$actually_misannotated]
+  annotation <- result$diagnostics$annotation_threshold
+  reference <- if (is.null(annotation)) numeric() else
+    annotation$margin[annotation$population == "reference_negative"]
+  pct <- function(x) {
+    if (length(x) != 1L || !is.finite(x)) "not available" else
+      sprintf("%.2f%%", 100 * x)
+  }
+  flagged_rate <- function(x) {
+    x <- x[is.finite(x)]
+    if (!length(x) || length(cutoff) != 1L || is.na(cutoff)) {
+      return(NA_real_)
+    }
+    mean(x > cutoff)
+  }
+  source <- if (identical(det$source, "simulated_swaps_cross_fitted")) {
+    paste0("Cross-simulation (", det$n_repeats_validated, " held-out repeats)")
+  } else if (identical(det$source, "simulated_swaps_in_sample")) {
+    "In-sample verdict rates (cross-fitting unavailable)"
+  } else {
+    "All-alternatives diagnostic (simulated swaps unavailable)"
+  }
+  c(
+    sprintf("Detection targets: sensitivity 80%%; specificity %s.",
+            pct(result$thresholds$target_specificity)),
+    sprintf("In-sample at cutoff %s: sensitivity %s (swapped n=%d);",
+            format(cutoff, digits = 4), pct(flagged_rate(positives)),
+            sum(is.finite(positives))),
+    sprintf("simulated specificity %s (unchanged n=%d); reference specificity %s.",
+            pct(1 - flagged_rate(negatives)), sum(is.finite(negatives)),
+            pct(1 - flagged_rate(reference))),
+    sprintf("%s: sensitivity %s; simulated specificity %s.",
+            source, pct(det$sensitivity), pct(det$simulated_specificity)),
+    "Rows may reuse samples across repeats; pre-swap labels are assumed correct.",
+    "Estimated errors using the simulated verdict rates above:",
+    .format_detection_error_estimate(result$performance$estimated_detection_errors)
+  )
+}
+
 #' Write a printable annotation QC report
 #'
 #' Writes a six-page report covering the overview, first-pass holdout,
@@ -69,6 +115,8 @@ utils::globalVariables(c("x", "y", "rate", "metric", "group", "held"))
 #' population. The marked correction cutoff is selected from the filtered
 #' samples. Set `diagnostics = TRUE` in [check_annotations()] for
 #' the detailed plots; unavailable sections are labelled.
+#' The misannotation page shows detection targets, in-sample and verdict
+#' simulation rates, and exploratory estimated detection errors together.
 #'
 #' Internal validation uses simulated errors and is not ground truth or a
 #' sample-level probability. First-pass agreement is with observed labels.
@@ -257,29 +305,19 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
   cutoff <- result$thresholds$annotation_margin
   positives <- if (is.null(sim)) numeric() else sim$annotation_margin[sim$actually_misannotated]
   negatives <- if (is.null(sim)) numeric() else sim$annotation_margin[!sim$actually_misannotated]
-  annotation <- if (is.null(diag)) NULL else diag$annotation_threshold
-  reference_negatives <- if (is.null(annotation)) numeric() else
-    annotation$margin[annotation$population == "reference_negative"]
-  caption <- paste0(
-    "Cutoff ", num(cutoff), ": simulated sensitivity ", pct(rate(positives, cutoff)),
-    " (n=", sum(is.finite(positives)), "); simulated specificity ",
-    pct(1 - rate(negatives, cutoff)), " (n=", sum(is.finite(negatives)), ").\n",
-    "Reference specificity ", pct(1 - rate(reference_negatives, cutoff)),
-    "; verdict sensitivity ", pct(det$sensitivity), "; verdict simulated specificity ",
-    pct(det$simulated_specificity), " (",
-    if (is.null(det$source)) "source unavailable" else det$source, ", ",
-    num(det$n_repeats_validated), " cross-fitted repeats).\n",
-    "Simulated rows across ", if (is.null(sim)) 0 else length(unique(sim$repeat_id)),
-    " repeats; some samples can appear in multiple repeats.\n",
-    "Cutoff uses both negative groups; curves are in-sample. Pre-swap labels are assumed truth."
-  )
+  caption <- "Final cutoff uses both negative groups; curves are in-sample."
   mismatch_plot <- if (is.null(sim) || !length(positives) || !length(negatives)) {
     empty(paste("3. Misannotation detection |", verdict("misannotation_detection")),
           "Simulated swaps or unchanged samples unavailable")
   } else curve_plot(positives, negatives, cutoff, "upper",
                     paste("3. Misannotation detection |", verdict("misannotation_detection")),
                     caption, "Annotation margin cutoff")
-  draw_page(list(mismatch_plot), 1, 1)
+  summary <- .report_detection_summary(result)
+  summary_data <- data.frame(x = 0, y = -seq_along(summary), group = summary)
+  summary_plot <- ggplot2::ggplot(summary_data, ggplot2::aes(x = x, y = y, label = group)) +
+    ggplot2::geom_text(hjust = 0, size = 3.2) + ggplot2::xlim(0, 1) +
+    ggplot2::theme_void()
+  draw_page(list(mismatch_plot, summary_plot), 2, 1)
 
   # 4. Recovery coverage in the full and correction-calibration populations.
   eligible <- if (is.null(sim)) logical() else

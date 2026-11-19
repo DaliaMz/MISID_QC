@@ -62,10 +62,13 @@ The final cutoff maximizes simulated-swap sensitivity while independently
 requiring both reference and unchanged simulated specificity to meet
 `target_specificity`. If simulations are unavailable, it falls back to
 calibration against the reference and all wrong-label alternatives.
-The detection verdict also requires simulated specificity among unchanged
-simulation samples to reach `target_specificity`. This specificity is
-cross-fitted by repeat when possible, and in-sample with one repeat; without
+The detection verdict uses simulated sensitivity (target 80%) and specificity
+(target `target_specificity`). It is `appears_feasible` when both meet their
+targets, `unreliable` when either misses by more than 10 percentage points, and
+`below_target` for smaller shortfalls (including exactly 10 points). The rates
+are cross-fitted by repeat when possible, and in-sample with one repeat; without
 simulated positives or unchanged samples the verdict is insufficient evidence.
+This verdict does not change sample flags or candidate corrections.
 `performance$misannotation_detection$simulated_specificity` is the verdict
 estimate, while `specificity` is the original reference specificity.
 `performance$estimated_detection_errors` uses the observed suspicious-flag
@@ -146,6 +149,9 @@ annotation_report(result, "annotation-report.pdf")
 ```
 
 The report uses ggplot2, which must be installed before installing this package.
+The misannotation page shows detection targets, in-sample and cross-simulation
+rates, and estimated detection errors together. When cross-fitting is
+unavailable, it labels the verdict rates as in-sample or unavailable.
 Its recovery page compares all simulated samples with the filtered
 correction-calibration samples. Coverage is relative to each population, so
 equal coverage does not necessarily mean the same top-margin cutoff. The

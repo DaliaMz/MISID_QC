@@ -119,6 +119,18 @@
   if (denominator == 0) NA_real_ else numerator / denominator
 }
 
+.detection_verdict <- function(sensitivity, specificity, target_specificity,
+                               enough_known, swap_simulation) {
+  if (!enough_known || !swap_simulation ||
+      !is.finite(sensitivity) || !is.finite(specificity)) {
+    return("insufficient_evidence")
+  }
+  shortfalls <- c(0.8 - sensitivity, target_specificity - specificity)
+  if (all(shortfalls <= 0)) return("appears_feasible")
+  if (any(shortfalls > 0.1 + 16 * .Machine$double.eps)) return("unreliable")
+  "below_target"
+}
+
 .estimate_detection_errors <- function(flagged, sensitivity, specificity, source) {
   result <- list(
     status = "unavailable", reason = NULL, n_samples = length(flagged),

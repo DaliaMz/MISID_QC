@@ -17,6 +17,8 @@ filtered correction-calibration samples, each relative to its own population.
 The marked correction cutoff is selected from the filtered samples. Run
 \code{\link{check_annotations}} with
 \code{diagnostics = TRUE} for the detailed plots; unavailable sections are labelled.
+The misannotation page shows detection targets, in-sample and verdict
+simulation rates, and exploratory estimated detection errors together.
 }
 \details{
 Internal validation uses simulated errors and is not ground truth or a

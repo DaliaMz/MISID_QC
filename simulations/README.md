@@ -169,6 +169,9 @@ differently from their observed label. It is unavailable if no such samples
 pass the cutoff or the verdict has insufficient evidence; it does not assess
 whether another cutoff could have succeeded. The simulated correction cutoff
 and accuracy use the same simulated rows and can be optimistic.
+Detection `verdict_correct` is unavailable for `below_target` and
+`insufficient_evidence` verdicts rather than treating them as hard failures.
+The `verdict10` config suffix distinguishes the revised detection verdict.
 Runner summaries report `correction_threshold` rather than the removed
 `abstain_threshold`. Prediction coverage includes agreeing predictions and
 disagreements at or above the correction cutoff, independently of unknown
