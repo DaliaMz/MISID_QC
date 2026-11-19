@@ -38,6 +38,22 @@ stopifnot(holdout_threshold(holdout_scores, TRUE, 0.75, "top") == 1)
 stopifnot(holdout_threshold(holdout_scores, TRUE, 0.75,
                             "all_alternatives") == 10)
 
+correction_threshold <- get(".correction_threshold",
+                            asNamespace("SampleAnnotationLikelihood"))
+simulated <- data.frame(
+  top_margin = c(5, 4, 3, 100, 100),
+  actually_misannotated = c(TRUE, TRUE, FALSE, FALSE, FALSE),
+  agreement_simulated = c(FALSE, TRUE, FALSE, TRUE, TRUE),
+  agreement_real = c(TRUE, FALSE, FALSE, TRUE, TRUE)
+)
+cutoff <- correction_threshold(simulated, 0.9)
+stopifnot(cutoff$threshold == 5, cutoff$n_eligible == 3L,
+          cutoff$n_retained == 1L, cutoff$coverage == 1/3, cutoff$accuracy == 1)
+stopifnot(correction_threshold(simulated, 0.5)$threshold == 4)
+simulated$top_margin[2] <- 5
+stopifnot(is.infinite(correction_threshold(simulated, 0.9)$threshold),
+          is.infinite(correction_threshold(NULL, 0.9)$threshold))
+
 progress_messages <- character()
 withCallingHandlers(
   result <- check_annotations(expression, metadata, "sample", "individual",
@@ -232,6 +248,23 @@ stopifnot(length(top_reference) == sum(top_result$diagnostics$first_pass$correct
           isTRUE(all.equal(unname(quantile(top_reference, 0.025, type = 1)),
                            top_result$calibration$exclusion_margin_threshold)))
 
+recovery_curves <- SampleAnnotationLikelihood:::.report_recovery_curves(
+  data.frame(top_margin = c(1, 2, 3, 4),
+             actually_misannotated = c(TRUE, FALSE, FALSE, FALSE),
+             agreement_simulated = c(FALSE, FALSE, TRUE, TRUE),
+             agreement_real = c(TRUE, FALSE, TRUE, TRUE))
+)
+full_coverage <- recovery_curves[recovery_curves$x == 1, ]
+stopifnot(full_coverage$y[full_coverage$group == "All simulated samples"] == 0.75,
+          full_coverage$y[full_coverage$group ==
+                            "Swaps and unchanged disagreements"] == 0.5,
+          nrow(SampleAnnotationLikelihood:::.report_recovery_curves(NULL)) == 0L)
+unchanged <- data.frame(top_margin = c(1, 2),
+                        actually_misannotated = FALSE,
+                        agreement_simulated = TRUE, agreement_real = TRUE)
+stopifnot(all(SampleAnnotationLikelihood:::.report_recovery_curves(unchanged)$group ==
+                "All simulated samples"))
+
 report_file <- tempfile(fileext = ".pdf")
 stopifnot(identical(annotation_report(diagnostic_result, report_file), report_file))
 stopifnot(file.exists(report_file), file.info(report_file)$size > 0)
@@ -417,6 +450,42 @@ held_result <- check_annotations(
   "individual", cv_folds = NULL, min_agreement = 0, progress = FALSE,
   mismatch_repeats = 2, margin_coverage = 0, detect_unknown = FALSE
 )
+selected <- with(held_result$mismatch_simulation,
+                 actually_misannotated | simulated_id != predicted_id)
+retained <- selected &
+  held_result$mismatch_simulation$top_margin >= held_result$thresholds$correction_margin
+correction_calibration <- held_result$calibration$correction_margin
+stopifnot(correction_calibration$n_eligible == sum(selected),
+          correction_calibration$n_retained == sum(retained))
+if (any(retained)) {
+  stopifnot(correction_calibration$accuracy ==
+              mean(held_result$mismatch_simulation$agreement_real[retained]),
+            correction_calibration$accuracy >= held_result$calibration$min_accuracy)
+}
+stopifnot(all(held_result$predictions$top_score_margin[
+  !is.na(held_result$predictions$candidate_correction)] >=
+    held_result$thresholds$correction_margin))
+sim <- held_result$mismatch_simulation
+proposed <- sim$annotation_margin > held_result$thresholds$annotation_margin &
+  sim$top_margin >= max(held_result$thresholds$abstain_margin,
+                        held_result$thresholds$correction_margin) &
+  sim$simulated_id != sim$predicted_id
+stopifnot(held_result$performance$correction_validation$n_proposed == sum(proposed))
+if (any(proposed)) {
+  stopifnot(held_result$performance$correction_validation$precision ==
+              mean(sim$agreement_real[proposed]))
+}
+stopifnot(held_result$feasibility$identity_recovery ==
+            if (is.finite(correction_calibration$threshold))
+              "appears_feasible" else "unreliable")
+without_swaps <- check_annotations(
+  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+  "individual", min_agreement = 0, progress = FALSE,
+  mismatch_rate = 0, detect_unknown = FALSE
+)
+stopifnot(without_swaps$feasibility$identity_recovery == "insufficient_evidence",
+          is.infinite(without_swaps$thresholds$correction_margin),
+          all(is.na(without_swaps$predictions$candidate_correction)))
 dp <- held_result$predictions
 set.seed(4)
 held_rate_result <- check_annotations(

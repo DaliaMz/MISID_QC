@@ -230,7 +230,7 @@ plot_check_annotation_gates <- function(result, file = NULL) {
 
   recovery <- c(
     Overall = performance$identity_recovery_accuracy,
-    `Swapped samples` = performance$recovery_accuracy_misannotated
+    `Filtered at cutoff` = result$calibration$correction_margin$accuracy
   )
   graphics::plot(
     c(0, 1), c(0, 1), type = "n", xlim = c(0.5, 2.5), ylim = c(0, 1),
@@ -238,7 +238,7 @@ plot_check_annotation_gates <- function(result, file = NULL) {
     main = paste("Identity recovery", recovery_status)
   )
   graphics::axis(1, at = 1:2, labels = names(recovery))
-  graphics::abline(h = 0.8, col = "firebrick", lty = 2)
+  graphics::abline(h = result$calibration$min_accuracy, col = "firebrick", lty = 2)
   for (i in which(is.finite(recovery))) {
     graphics::segments(i, 0, i, recovery[[i]], lwd = 8, col = "steelblue")
   }

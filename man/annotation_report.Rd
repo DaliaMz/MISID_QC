@@ -12,7 +12,10 @@ annotation_report(result, file = "annotation_report.pdf")
 \description{
 Writes a six-page ggplot2 report covering the overview, first-pass holdout,
 misannotation calibration, recovery coverage, unknown detection, and actual
-sample distributions. Run \code{\link{check_annotations}} with
+sample distributions. Recovery coverage shows all simulated samples and the
+filtered correction-calibration samples, each relative to its own population.
+The marked correction cutoff is selected from the filtered samples. Run
+\code{\link{check_annotations}} with
 \code{diagnostics = TRUE} for the detailed plots; unavailable sections are labelled.
 }
 \details{

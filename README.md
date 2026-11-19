@@ -98,9 +98,18 @@ agreement) and is not overwritten by feasibility, which is reported separately
 in `results$feasibility`. All samples, including held-out samples, are
 `suspicious` only when their annotation margin exceeds the calibrated cutoff.
 Every input sample has a row in `predictions`.
-Candidate
-corrections are emitted only when identity
-recovery on simulated misannotated samples appears feasible.
+For correction calibration, simulations include swapped samples plus unchanged
+samples predicted as a different identity. The lowest top-margin cutoff reaching
+`min_accuracy` (default 90%) on that filtered set is recorded in
+`thresholds$correction_margin`; the retained count, coverage and in-sample accuracy are in
+`calibration$correction_margin`. Swaps predicted as their simulated label are
+included, so this accuracy is not the precision of proposed corrections.
+Recovery appears feasible if such a cutoff exists and there are at least 20
+input samples; without swaps it is insufficient evidence. Candidates must also
+pass the existing suspicious, general prediction and unknown gates. There is no
+minimum retained simulation count: even one correct simulated row can meet the
+target. The cutoff and accuracy use the same simulations, whose rows may be
+dependent, so the estimate can be optimistic.
 
 To inspect the individual stages and plot the margins and cutoffs, load the
 development version and request diagnostics:
@@ -131,6 +140,10 @@ annotation_report(result, "annotation-report.pdf")
 ```
 
 The report uses ggplot2, which must be installed before installing this package.
+Its recovery page compares all simulated samples with the filtered
+correction-calibration samples. Coverage is relative to each population, so
+equal coverage does not necessarily mean the same top-margin cutoff. The
+marked correction cutoff is selected from the filtered samples.
 Margins and unknown scores are plotted on their original, untransformed scales.
 The report marks detailed calibration plots unavailable if diagnostics were
 not retained. Its simulated validation estimates are exploratory, not true

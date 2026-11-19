@@ -450,3 +450,23 @@
   ok <- !is.na(accuracy) & accuracy >= min_accuracy
   list(threshold = if (any(ok)) min(candidates[ok]) else Inf)
 }
+
+.correction_threshold <- function(simulation, min_accuracy) {
+  empty <- list(threshold = Inf, n_eligible = 0L, n_retained = 0L,
+                coverage = NA_real_, accuracy = NA_real_)
+  if (is.null(simulation)) return(empty)
+  eligible <- simulation$actually_misannotated |
+    !simulation$agreement_simulated
+  selected <- simulation[eligible, , drop = FALSE]
+  empty$n_eligible <- nrow(selected)
+  if (!nrow(selected)) return(empty)
+  empty$coverage <- 0
+  curve <- .risk_coverage(selected$top_margin, selected$agreement_real,
+                          n_thresholds = nrow(selected))
+  passing <- which(curve$agreement >= min_accuracy)
+  if (!length(passing)) return(empty)
+  chosen <- passing[which.min(curve$threshold[passing])]
+  list(threshold = curve$threshold[chosen], n_eligible = nrow(selected),
+       n_retained = curve$n_retained[chosen], coverage = curve$coverage[chosen],
+       accuracy = curve$agreement[chosen])
+}

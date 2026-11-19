@@ -67,8 +67,9 @@ true-label agreement (observed agreement when the simulation is off) among
 retained samples reaches this value. Abstaining samples get \code{predicted_id_clean = NA}
 (\code{predicted_id} keeps the raw top candidate). They can still be flagged as
 suspicious when the annotation margin is large, but never receive a candidate
-correction; if the target is never reached, all samples
-abstain.}
+correction; if the target is never reached, all samples abstain. A separate
+correction cutoff also uses this target, on swapped samples and unchanged
+samples whose predicted identity differs from their simulated label.}
 \item{detect_unknown}{If \code{FALSE}, unknown-individual detection is switched
 off: no stranger validation is run, no sample is marked as a potential
 unknown individual, and abstention uses only the abstention cutoff.
@@ -132,7 +133,16 @@ Set \code{progress = TRUE} to display the summary.
 every-wrong-label diagnostic, and \code{performance$recovery_accuracy_misannotated}
 and \code{performance$correction_validation} report recovery on simulated
 misannotated samples and the precision and recall of proposed corrections.
-Candidate corrections require identity recovery to appear feasible. If
+The correction cutoff is the lowest top margin reaching \code{min_accuracy} on
+the filtered simulations. It includes swapped samples even when predicted as
+their simulated label, so this accuracy is not correction precision.
+\code{calibration$correction_margin} reports the threshold, retained count, coverage and
+in-sample accuracy. Recovery appears feasible if the cutoff exists and there are
+at least 20 input samples; without swaps it is insufficient evidence. Candidates
+must also pass the general prediction, unknown and suspicious gates. There is
+no minimum retained simulated count, so even one correct row can meet the
+target. Simulation rows can be dependent and in-sample cutoff selection can
+make the accuracy optimistic. If
 \code{diagnostics = TRUE}, the result also
 contains first-pass and final-pass sample margins, threshold populations,
 abstention-curve data, and gate inputs under \code{diagnostics}.

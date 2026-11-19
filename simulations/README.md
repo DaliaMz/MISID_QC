@@ -163,6 +163,13 @@ Rscript simulations/Aggregate_gtex_results.R out=simulations/results_mismatch_ra
 Rscript simulations/Run_across_simulated_data.R combine=TRUE out=simulations/results_mismatch_rate
 ```
 
+`recovery_verdict_correct` compares the verdict with true accuracy at the
+selected correction cutoff on misannotated samples and samples predicted
+differently from their observed label. It is unavailable if no such samples
+pass the cutoff or the verdict has insufficient evidence; it does not assess
+whether another cutoff could have succeeded. The simulated correction cutoff
+and accuracy use the same simulated rows and can be optimistic.
+
 ## GTEx benchmark scenarios and settings
 
 `Simulate_from_GTEX_grid.R` builds 150 base settings: tissue (6 or 12 tissues, 10

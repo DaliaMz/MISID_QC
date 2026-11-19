@@ -44,11 +44,30 @@ utils::globalVariables(c("x", "y", "rate", "metric", "group", "held"))
   as.vector(margins[!is.na(margins)])
 }
 
+.report_recovery_curves <- function(simulation) {
+  empty <- data.frame(x = numeric(), y = numeric(), group = character())
+  if (is.null(simulation) || !nrow(simulation)) return(empty)
+  eligible <- simulation$actually_misannotated |
+    !simulation$agreement_simulated
+  curve <- function(keep, label) {
+    if (!any(keep)) return(empty)
+    risk <- .risk_coverage(simulation$top_margin[keep],
+                           simulation$agreement_simulated[keep],
+                           simulation$agreement_real[keep])
+    data.frame(x = risk$coverage, y = risk$agreement_real, group = label)
+  }
+  rbind(curve(rep(TRUE, nrow(simulation)), "All simulated samples"),
+        curve(eligible, "Swaps and unchanged disagreements"))
+}
+
 #' Write a printable annotation QC report
 #'
 #' Writes a six-page report covering the overview, first-pass holdout,
 #' misannotation calibration, recovery coverage, unknown detection, and actual
-#' sample distributions. Set `diagnostics = TRUE` in [check_annotations()] for
+#' sample distributions. Recovery coverage shows both all simulated samples
+#' and the filtered correction-calibration samples, each relative to its own
+#' population. The marked correction cutoff is selected from the filtered
+#' samples. Set `diagnostics = TRUE` in [check_annotations()] for
 #' the detailed plots; unavailable sections are labelled.
 #'
 #' Internal validation uses simulated errors and is not ground truth or a
@@ -173,9 +192,10 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     .format_detection_error_estimate(result$performance$estimated_detection_errors),
     sprintf("Detection cutoff: %s | target specificity: %s",
             num(result$thresholds$annotation_margin), pct(result$thresholds$target_specificity)),
-    sprintf("Recovery: %s | simulated mislabel accuracy %s | cutoff %s",
-            verdict("identity_recovery"), pct(result$performance$recovery_accuracy_misannotated),
-            num(result$thresholds$abstain_margin)),
+    sprintf("Recovery: %s | filtered simulated accuracy %s (n=%s) | correction cutoff %s",
+            verdict("identity_recovery"), pct(result$calibration$correction_margin$accuracy),
+            num(result$calibration$correction_margin$n_retained),
+            num(result$thresholds$correction_margin)),
     sprintf("Unknown: %s | sensitivity %s | specificity %s",
             verdict("unknown_individual_detection"),
             pct(result$performance$unknown_individual_detection$sensitivity),
@@ -261,25 +281,45 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
                     caption, "Annotation margin cutoff")
   draw_page(list(mismatch_plot), 1, 1)
 
-  # 4. Coverage is calculated from simulated top margins, not final unknown abstention.
-  risk <- result$risk_coverage
-  sim_risk <- if (is.data.frame(risk)) risk[risk$source == "simulated" &
-                                               is.finite(risk$agreement_real), , drop = FALSE] else NULL
-  if (!is.null(sim_risk) && nrow(sim_risk) && !is.null(sim) && nrow(sim)) {
-    d <- data.frame(x = sim_risk$coverage, y = sim_risk$agreement_real)
-    top <- sim$top_margin[is.finite(sim$top_margin)]
-    coverage <- if (length(top)) mean(top >= result$thresholds$abstain_margin) else NA_real_
-    recovery_plot <- ggplot2::ggplot(d, ggplot2::aes(x = x, y = y)) +
-      ggplot2::geom_line(colour = "#27658b", linewidth = 0.8) +
+  # 4. Recovery coverage in the full and correction-calibration populations.
+  eligible <- if (is.null(sim)) logical() else
+    sim$actually_misannotated | !sim$agreement_simulated
+  recovery_curves <- .report_recovery_curves(sim)
+  if (nrow(recovery_curves)) {
+    coverage <- result$calibration$correction_margin$coverage
+    correction_cutoff <- result$thresholds$correction_margin
+    has_cutoff <- length(coverage) == 1L && is.finite(coverage) &&
+      length(correction_cutoff) == 1L && is.finite(correction_cutoff)
+    singletons <- names(which(table(recovery_curves$group) == 1L))
+    cutoff_caption <- if (has_cutoff) {
+      paste0("Dashed = filtered coverage ", pct(coverage),
+             " at filtered correction cutoff ", num(correction_cutoff))
+    } else {
+      "No filtered correction cutoff available"
+    }
+    recovery_plot <- ggplot2::ggplot(recovery_curves,
+                                      ggplot2::aes(x = x, y = y, colour = group)) +
+      ggplot2::geom_line(data = recovery_curves[!recovery_curves$group %in%
+                                                  singletons, , drop = FALSE],
+                         linewidth = 0.8) +
+      ggplot2::geom_point(data = recovery_curves[recovery_curves$group %in%
+                                                   singletons, , drop = FALSE],
+                          size = 2) +
+      ggplot2::scale_colour_manual(
+        values = c("All simulated samples" = "#c46a24",
+                   "Swaps and unchanged disagreements" = "#27658b"),
+        name = NULL
+      ) +
       ggplot2::scale_x_continuous(limits = c(0, 1)) +
       ggplot2::scale_y_continuous(limits = c(0, 1)) +
       ggplot2::labs(title = paste("4. Identity recovery |", verdict("identity_recovery")),
-                    subtitle = "Agreement with pre-swap labels among retained simulated samples",
-                    x = "Simulated prediction coverage", y = "Agreement",
-                    caption = paste0("Dashed = coverage ", pct(coverage), " at top-margin cutoff ",
-                                     num(result$thresholds$abstain_margin), "; n=", length(top),
-                                     ".\nUnknown-flag abstention is not included; verdict uses the recovery estimate.")) + theme
-    if (is.finite(coverage)) recovery_plot <- recovery_plot +
+                    subtitle = "Agreement with pre-swap labels",
+                    x = "Coverage within each population", y = "Agreement",
+                    caption = paste0(
+                      cutoff_caption, "; filtered n=", sum(eligible), ", all n=", nrow(sim),
+                      ".\nSame coverage can mean different cutoffs; curves are in-sample.",
+                      "\nSuspicious, general prediction and unknown gates are not included.")) + theme
+    if (has_cutoff) recovery_plot <- recovery_plot +
       ggplot2::geom_vline(xintercept = coverage, colour = "firebrick", linetype = "dashed")
   } else {
     recovery_plot <- empty(paste("4. Identity recovery |", verdict("identity_recovery")),

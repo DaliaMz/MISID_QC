@@ -92,7 +92,7 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
               sorted = FALSE)
 # The suffix distinguishes dual calibration and verdicts from historical runs.
-configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s%s%s_dualcal_simspec", cv_folds, mismatch_repeats,
+configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s%s%s_dualcal_simspec_corrcal", cv_folds, mismatch_repeats,
                          margin_coverage, target_specificity,
                          ifelse(mismatch_rate == "0.1", "", paste0("_swap", mismatch_rate)),
                          ifelse(holdout_reference == "all_alternatives", "",
@@ -138,6 +138,12 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
   all_alt <- perf$all_alternatives_detection
   corr_v <- perf$correction_validation
   rec_true <- ratio(sum(p$predicted_id[bad] == truth[bad]), sum(bad))
+  correction_reference <- (bad | p$predicted_id != p$observed_id) &
+    p$top_score_margin >= r$thresholds$correction_margin
+  correction_reference_accuracy <- ratio(
+    sum(p$predicted_id[correction_reference] == truth[correction_reference]),
+    sum(correction_reference)
+  )
   verdict <- r$feasibility$misannotation_detection
   true_detection_feasible <- if (!any(bad)) {
     isTRUE(spec >= 0.95)
@@ -167,8 +173,10 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
     verdict_correct = if (low) NA else (verdict == "appears_feasible") ==
       true_detection_feasible,
     recovery_verdict = r$feasibility$identity_recovery,
-    recovery_verdict_correct = if (low || is.na(rec_true)) NA else
-      (r$feasibility$identity_recovery == "appears_feasible") == (rec_true >= 0.8),
+    recovery_verdict_correct = if (low || is.na(correction_reference_accuracy) ||
+                                   r$feasibility$identity_recovery == "insufficient_evidence") NA else
+      (r$feasibility$identity_recovery == "appears_feasible") ==
+        (correction_reference_accuracy >= r$calibration$min_accuracy),
     # detection benchmark behind the verdict: where sensitivity came from, its
     # in-sample value and spread, and the every-wrong-label diagnostic
     detection_source = or_na(det$source),
@@ -181,6 +189,7 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
     # recovery on the truly misannotated samples: reported (simulated swaps)
     # versus true
     recovery_true_misid = rec_true,
+    recovery_true_at_correction_cutoff = correction_reference_accuracy,
     recovery_reported_misid = or_na(perf$recovery_accuracy_misannotated),
     recovery_gap = or_na(perf$recovery_accuracy_misannotated) - rec_true,
     # proposed corrections: reported (simulated swaps) versus true

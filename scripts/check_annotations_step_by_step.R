@@ -371,10 +371,11 @@ recovery_misannotated <- if (swap_simulation) {
 } else {
   NA_real_
 }
+correction_threshold <- .correction_threshold(simulation, min_accuracy)
 correction_validation <- if (!is.null(simulation)) {
   proposed <- simulation$annotation_margin > margin_threshold &
     simulation$top_margin >= max(
-      abstain_threshold,
+      abstain_threshold, correction_threshold$threshold,
       if (use_distance || !detect_unknown) -Inf else unknown_threshold
     ) &
     !simulation$agreement_simulated
@@ -418,6 +419,7 @@ calibration <- list(
   margin_threshold = margin_threshold,
   exclusion_margin_threshold = top_margin_threshold,
   abstain_margin_threshold = abstain_threshold,
+  correction_margin = correction_threshold,
   prediction_coverage = mean(confident_prediction),
   abstain_reason_counts = abstain_reason_counts,
   min_accuracy = min_accuracy,
@@ -495,14 +497,10 @@ if (assess_feasibility) {
   } else {
     "unreliable"
   }
-  recovery_estimate <- if (is.finite(recovery_misannotated)) {
-    recovery_misannotated
-  } else {
-    identity_recovery
-  }
-  recovery_status <- if (!enough_known) {
+  recovery_status <- if (!enough_known || !swap_simulation ||
+                         correction_threshold$n_eligible == 0L) {
     "insufficient_evidence"
-  } else if (recovery_estimate >= 0.8) {
+  } else if (is.finite(correction_threshold$threshold)) {
     "appears_feasible"
   } else {
     "unreliable"
@@ -530,7 +528,8 @@ str(feasibility)
 
 # ---- 19. Candidate corrections and annotation status -----------------------
 predictions$candidate_correction <- ifelse(
-  flagged & reliable_correction & confident_prediction & predicted_id != y,
+  flagged & reliable_correction & confident_prediction &
+    top_margin >= correction_threshold$threshold & predicted_id != y,
   predicted_id, NA_character_
 )
 predictions$annotation_status <- ifelse(
@@ -563,6 +562,7 @@ result <- list(
       unknown_threshold,
     unknown_distance = if (use_distance) unknown_threshold else Inf,
     abstain_margin = abstain_threshold,
+    correction_margin = correction_threshold$threshold,
     target_specificity = target_specificity
   )
 )

@@ -67,7 +67,9 @@
 #'   samples get `predicted_id_clean = NA` (`predicted_id` keeps the raw top
 #'   candidate). They can still be flagged as suspicious when the annotation
 #'   margin is large, but never receive a candidate correction; if the target is never reached, all
-#'   samples abstain.
+#'   samples abstain. A separate correction cutoff also uses this target:
+#'   its simulation reference includes swapped samples and unchanged samples
+#'   whose predicted identity differs from their simulated label.
 #' @param detect_unknown If `FALSE`, unknown-individual detection is switched
 #'   off: no stranger validation is run, no sample is marked as a potential
 #'   unknown individual, and abstention uses only the abstention cutoff.
@@ -132,7 +134,17 @@
 #'   `performance$recovery_accuracy_misannotated` and
 #'   `performance$correction_validation` report recovery on simulated
 #'   misannotated samples and the precision and recall of proposed corrections.
-#'   Candidate corrections require identity recovery to appear feasible.
+#'   The correction cutoff is the lowest top margin reaching `min_accuracy`
+#'   on that filtered simulation reference. It includes swapped samples even
+#'   when the prediction equals their simulated label, so this accuracy is not
+#'   the precision of proposed corrections. The result records its threshold,
+#'   retained count, coverage and in-sample accuracy in `calibration$correction_margin`.
+#'   Identity recovery appears feasible when that cutoff exists and the input
+#'   has at least 20 samples; without swaps it is insufficient evidence.
+#'   Candidates must also pass the general prediction, unknown and suspicious
+#'   gates. There is no minimum retained simulated count; even one correct row
+#'   can meet the target. Repeated rows are dependent, and selecting and
+#'   evaluating the cutoff on the same simulations can be optimistic.
 #' @export
 check_annotations <- function(expr, metadata, sample_col, id_col,
                               shrinkage = 0.1, target_specificity = 0.95,
@@ -572,10 +584,11 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   } else {
     NA_real_
   }
+  correction_threshold <- .correction_threshold(simulation, min_accuracy)
   correction_validation <- if (!is.null(simulation)) {
     proposed <- simulation$annotation_margin > margin_threshold &
       simulation$top_margin >= max(
-        abstain_threshold,
+        abstain_threshold, correction_threshold$threshold,
         if (use_distance || !detect_unknown) -Inf else unknown_threshold
       ) &
       !simulation$agreement_simulated
@@ -620,6 +633,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     exclusion_margin_threshold = top_margin_threshold,
     holdout_reference = holdout_reference,
     abstain_margin_threshold = abstain_threshold,
+    correction_margin = correction_threshold,
     prediction_coverage = mean(confident_prediction),
     abstain_reason_counts = abstain_reason_counts,
     min_accuracy = min_accuracy,
@@ -709,14 +723,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     } else {
       "unreliable"
     }
-    recovery_estimate <- if (is.finite(recovery_misannotated)) {
-      recovery_misannotated
-    } else {
-      identity_recovery
-    }
-    recovery_status <- if (!enough_known) {
+    recovery_status <- if (!enough_known || !swap_simulation ||
+                           correction_threshold$n_eligible == 0L) {
       "insufficient_evidence"
-    } else if (recovery_estimate >= 0.8) {
+    } else if (is.finite(correction_threshold$threshold)) {
       "appears_feasible"
     } else {
       "unreliable"
@@ -744,8 +754,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         "available (see performance$misannotation_detection$source); the",
         "unknown cutoff (unless unknown_threshold_method = \"mad\") is",
         "tuned on the same simulated strangers used to estimate unknown",
-        "sensitivity, which makes that sensitivity optimistic. Recovery and correction estimates use the final cutoffs",
-        "on the same simulated swaps."
+        "sensitivity, which makes that sensitivity optimistic. Correction",
+        "cutoff selection and accuracy use the same simulated swaps, which",
+        "can make the accuracy optimistic, especially with few retained rows."
       )
     )
     # Corrections need validated identity recovery; the suspicious flag itself
@@ -756,7 +767,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   predictions$candidate_correction <- ifelse(
       flagged & reliable_correction &
-        confident_prediction & predicted_id != y,
+        confident_prediction & top_margin >= correction_threshold$threshold &
+        predicted_id != y,
       predicted_id,
       NA_character_
   )
@@ -790,6 +802,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         unknown_threshold,
       unknown_distance = if (use_distance) unknown_threshold else Inf,
       abstain_margin = abstain_threshold,
+      correction_margin = correction_threshold$threshold,
       target_specificity = target_specificity
     )
   )
