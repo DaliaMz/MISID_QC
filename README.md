@@ -53,6 +53,13 @@ are **not** annotation-correctness probabilities: no absolute probability
 that a sample is correctly annotated is reported because the true error
 prevalence is unknown. Internal artificial relabeling and leave-one-individual-
 out experiments provide exploratory, dataset-specific performance summaries.
+`results$unknown_simulation` contains the held-out-individual sample records,
+including their original and randomly assigned labels, predictions, margins,
+nearest-class distances, and unknown flags. The corresponding raw LDA scores
+are in `results$unknown_simulation_scores`, in the same row order; held-out
+classes have `NA` scores. Both are `NULL` when unknown detection is disabled
+or no held-out-individual samples can be simulated. The scores come from
+different models and are intended for class comparisons within each sample.
 Relabeling metrics: detection sensitivity comes from the simulated pairwise
 swaps and, with `mismatch_repeats >= 2`, is cross-fitted (each repeat is
 scored with a cutoff tuned on simulated positives and unchanged samples from the

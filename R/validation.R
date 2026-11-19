@@ -366,6 +366,8 @@
   }
   unknown_margin <- numeric()
   unknown_distance <- numeric()
+  records <- list()
+  score_rows <- list()
   progress_interval <- max(1L, ceiling(n_groups / 10L))
   for (g in seq_len(n_groups)) {
     members <- classes[group == g]
@@ -391,13 +393,32 @@
           c(y[base], wrong[half != h]), shrinkage = shrinkage
         )
         scores <- predict_shrinkage_lda(model, x[scored, , drop = FALSE])
+        margins <- .score_margins(scores, wrong[half == h])
+        distances <- .nearest_class_distance(model, x[scored, , drop = FALSE])
         unknown_margin <- c(
-          unknown_margin, .score_margins(scores, y[scored])$top_margin
+          unknown_margin, margins$top_margin
         )
-        unknown_distance <- c(
-          unknown_distance,
-          .nearest_class_distance(model, x[scored, , drop = FALSE])
+        unknown_distance <- c(unknown_distance, distances)
+        records[[length(records) + 1L]] <- data.frame(
+          sample_id = rownames(x)[scored],
+          original_id = y[scored],
+          simulated_id = wrong[half == h],
+          predicted_id = margins$predicted,
+          top_candidate_score = margins$top_score,
+          simulated_id_score = margins$observed_score,
+          annotation_margin = margins$annotation_margin,
+          top_margin = margins$top_margin,
+          nearest_class_distance = distances,
+          holdout_group = g,
+          scoring_fold = h,
+          stringsAsFactors = FALSE
         )
+        aligned_scores <- matrix(
+          NA_real_, nrow(scores), length(classes),
+          dimnames = list(rownames(scores), classes)
+        )
+        aligned_scores[, colnames(scores)] <- scores
+        score_rows[[length(score_rows) + 1L]] <- aligned_scores
       }
     }
     if (isTRUE(progress) &&
@@ -408,6 +429,8 @@
   }
   list(n = length(unknown_margin), top_margin = unknown_margin,
        distance = unknown_distance,
+       records = if (length(records)) do.call(rbind, records) else NULL,
+       identity_scores = if (length(score_rows)) do.call(rbind, score_rows) else NULL,
        status = if (length(unknown_margin)) "estimated" else
          "insufficient_evidence")
 }

@@ -86,6 +86,31 @@ stopifnot(isTRUE(all.equal(result$predictions$unknown_detection_score,
                            result$predictions$nearest_class_distance)))
 stopifnot(all(result$predictions$unknown_detection_threshold ==
               result$thresholds$unknown_distance))
+unknown_records <- result$unknown_simulation
+unknown_scores <- result$unknown_simulation_scores
+stopifnot(nrow(unknown_records) == result$performance$unknown_simulation_n,
+          identical(rownames(unknown_scores), unknown_records$sample_id),
+          all(unknown_records$original_id == ids[match(unknown_records$sample_id, samples)]),
+          all(unknown_records$original_id != unknown_records$simulated_id),
+          all(is.na(unknown_scores[cbind(seq_len(nrow(unknown_scores)),
+                                         match(unknown_records$original_id, colnames(unknown_scores)))])),
+          all(unknown_records$predicted_id ==
+                colnames(unknown_scores)[max.col(replace(unknown_scores, is.na(unknown_scores), -Inf),
+                                                ties.method = "first")]),
+          isTRUE(all.equal(
+            unknown_records$simulated_id_score,
+            unname(unknown_scores[cbind(seq_len(nrow(unknown_scores)),
+                                        match(unknown_records$simulated_id, colnames(unknown_scores)))]))),
+          isTRUE(all.equal(unknown_records$top_margin,
+                           unname(apply(unknown_scores, 1, function(x) {
+                             sorted <- sort(x, decreasing = TRUE)
+                             sorted[1] - sorted[2]
+                           })))),
+          isTRUE(all.equal(unknown_records$annotation_margin,
+                           unknown_records$top_candidate_score -
+                             unknown_records$simulated_id_score)),
+          identical(unknown_records$potential_unknown_individual,
+                    unknown_records$nearest_class_distance > result$thresholds$unknown_distance))
 stopifnot(identical(dim(result$identity_scores), c(length(ids), 3L)))
 stopifnot(identical(result$predictions$sample_id, samples))
 stopifnot(all(is.na(
@@ -348,6 +373,40 @@ unknown_off <- check_annotations(
   expression, metadata, "sample", "individual", progress = FALSE,
   detect_unknown = FALSE, diagnostics = TRUE
 )
+stopifnot(is.null(unknown_off$unknown_simulation),
+          is.null(unknown_off$unknown_simulation_scores))
+set.seed(73)
+unknown_mad <- check_annotations(
+  expression, metadata, "sample", "individual", progress = FALSE,
+  unknown_threshold_method = "mad", diagnostics = TRUE, mismatch_rate = 0
+)
+stopifnot(identical(unknown_mad$unknown_simulation$potential_unknown_individual,
+                    unknown_mad$unknown_simulation$top_margin <
+                      unknown_mad$thresholds$unknown_margin),
+          isTRUE(all.equal(unknown_mad$unknown_simulation$top_margin,
+                           unknown_mad$diagnostics$unknown$simulated_unknown_values)))
+set.seed(74)
+grouped_validation <- SampleAnnotationLikelihood:::.unknown_validation(
+  rbind(t(expression), t(expression[, 1:4]) + 8),
+  c(ids, rep("donor_d", 4)), 0.1, n_folds = 2L
+)
+grouped_records <- grouped_validation$records
+grouped_scores <- grouped_validation$identity_scores
+stopifnot(nrow(grouped_records) == grouped_validation$n,
+          identical(rownames(grouped_scores), grouped_records$sample_id),
+          all(vapply(split(seq_len(nrow(grouped_records)), grouped_records$holdout_group),
+                     function(i) {
+                       held_classes <- unique(grouped_records$original_id[i])
+                       all(is.na(grouped_scores[i, held_classes, drop = FALSE])) &&
+                         all(!grouped_records$simulated_id[i] %in% held_classes)
+                     }, logical(1))))
+no_unknown <- check_annotations(
+  expression[, ids != "donor_c"], metadata[metadata$individual != "donor_c", ],
+  "sample", "individual", progress = FALSE, mismatch_rate = 0
+)
+stopifnot(is.null(no_unknown$unknown_simulation),
+          is.null(no_unknown$unknown_simulation_scores),
+          no_unknown$performance$unknown_simulation_n == 0L)
 report_file <- tempfile(fileext = ".pdf")
 annotation_report(unknown_off, report_file)
 stopifnot(file.exists(report_file), file.info(report_file)$size > 0)

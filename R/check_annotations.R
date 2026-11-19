@@ -101,7 +101,8 @@
 #'   cutoff.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
 #'   `performance`, `calibration`, `risk_coverage` (see
-#'   [plot_risk_coverage()]), `mismatch_simulation`, `held_out` (count, fraction and IDs of samples held out as
+#'   [plot_risk_coverage()]), `mismatch_simulation`, `unknown_simulation`,
+#'   `unknown_simulation_scores`, `held_out` (count, fraction and IDs of samples held out as
 #'   confidently misassigned, from the first pass), `feasibility`, and
 #'   `thresholds` components. `predictions$potential_unknown_individual` is a
 #'   separate flag, not an `annotation_status` value. Predictions also include
@@ -111,6 +112,13 @@
 #'   All samples, including held-out samples, are flagged as suspicious only
 #'   when their annotation margin exceeds the calibrated threshold. Every input
 #'   sample has a row.
+#'   `unknown_simulation` contains one row per held-out-individual sample,
+#'   including its original and simulated labels, prediction, margins, distance,
+#'   holdout group, scoring fold and unknown flag. `unknown_simulation_scores`
+#'   contains the corresponding raw LDA scores, in the same row order; held-out
+#'   classes have `NA` scores. Both are `NULL` when detection is disabled or
+#'   no unknown samples are simulated. Scores come from different fitted
+#'   models and should be compared between classes within a sample.
 #'   `performance$misannotation_detection` includes simulated-swap sensitivity,
 #'   `simulated_specificity` on unchanged simulation samples and `specificity`
 #'   on the original reference samples. The detection verdict uses simulated
@@ -461,6 +469,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     else statistic < unknown_threshold
   }
   unknown_flag <- is_unknown(unknown_statistic)
+  unknown_simulation <- unknown$records
+  if (!is.null(unknown_simulation)) {
+    unknown_simulation$potential_unknown_individual <- is_unknown(stranger_statistic)
+  }
   unknown_metrics <- if (unknown$n) {
     .binary_metrics(
       c(rep(FALSE, sum(reference)), rep(TRUE, unknown$n)),
@@ -752,6 +764,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     calibration = calibration,
     risk_coverage = risk_coverage,
     mismatch_simulation = simulation,
+    unknown_simulation = unknown_simulation,
+    unknown_simulation_scores = unknown$identity_scores,
     held_out = list(
       n_confidently_misassigned = length(held_out_ids),
       n_samples = n_samples_first_pass,

@@ -101,7 +101,8 @@ reported unknown sensitivity and feasibility. With the default \code{unknown_thr
 \value{
 A list with sample-level \code{predictions}, raw \code{identity_scores},
 \code{performance}, \code{calibration}, \code{risk_coverage},
-\code{mismatch_simulation}, \code{held_out} (count, fraction and IDs of samples held
+\code{mismatch_simulation}, \code{unknown_simulation},
+\code{unknown_simulation_scores}, \code{held_out} (count, fraction and IDs of samples held
 out as confidently misassigned, from the first pass), \code{feasibility}, and
 \code{thresholds} components. \code{predictions$potential_unknown_individual} is a
 separate flag, not an \code{annotation_status} value. Predictions also include
@@ -110,6 +111,13 @@ the nearest-class distance and the unknown-detection score and threshold.
 agreement) and does not depend on \code{feasibility}.
 All samples, including held-out samples, are flagged as suspicious only when
 their annotation margin exceeds the calibrated threshold. Every input sample has a row.
+\code{unknown_simulation} contains one row per held-out-individual sample,
+including its original and simulated labels, prediction, margins, distance,
+holdout group, scoring fold and unknown flag. \code{unknown_simulation_scores}
+contains the corresponding raw LDA scores, in the same row order; held-out
+classes have \code{NA} scores. Both are \code{NULL} when detection is disabled or
+no unknown samples are simulated. Scores come from different fitted
+models and should be compared between classes within a sample.
 \code{performance$misannotation_detection} includes simulated-swap sensitivity,
 \code{simulated_specificity} on unchanged simulation samples and
 \code{specificity} on the original reference samples. The detection verdict
