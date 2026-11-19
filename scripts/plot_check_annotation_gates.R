@@ -128,27 +128,27 @@ plot_check_annotation_gates <- function(result, file = NULL) {
     )
   }
 
-  abstention <- diagnostics$abstention
-  curve <- abstention$curve
+  correction <- diagnostics$correction
+  curve <- correction$curve
   graphics::par(mfrow = c(1, 2))
-  if (nrow(curve)) {
+  if (!is.null(curve) && nrow(curve)) {
     graphics::plot(
       curve$threshold, curve$agreement, type = "b", pch = 16,
       xlab = "Top score - second score cutoff", ylab = "Agreement",
-      ylim = c(0, 1), main = "Gate 3: abstention accuracy"
+      ylim = c(0, 1), main = "Gate 3: filtered correction accuracy"
     )
-    graphics::abline(h = abstention$min_accuracy, col = "grey40", lty = 3)
-    add_threshold(abstention$threshold, "Selected abstention cutoff")
+    graphics::abline(h = correction$min_accuracy, col = "grey40", lty = 3)
+    add_threshold(correction$threshold, "Selected correction cutoff")
     graphics::plot(
-      curve$threshold, curve$n_retained / max(curve$n_retained),
+      curve$threshold, curve$coverage,
       type = "b", pch = 16, xlab = "Top score - second score cutoff",
       ylab = "Fraction retained", ylim = c(0, 1),
-      main = paste("Coverage; source:", abstention$source)
+      main = "Filtered simulation coverage"
     )
-    add_threshold(abstention$threshold, "Selected abstention cutoff")
+    add_threshold(correction$threshold, "Selected correction cutoff")
   } else {
     graphics::plot.new()
-    graphics::text(0.5, 0.5, "No abstention data")
+    graphics::text(0.5, 0.5, "No correction simulation data")
     graphics::plot.new()
     graphics::text(0.5, 0.5, "No coverage data")
   }
@@ -275,7 +275,7 @@ plot_check_annotation_gates <- function(result, file = NULL) {
     first_pass = first,
     final_pass = final,
     annotation_threshold = annotation,
-    abstention = abstention,
+    correction = correction,
     unknown = unknown,
     gates = gate
   ))

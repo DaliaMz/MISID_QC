@@ -89,7 +89,7 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
               sorted = FALSE)
 # The suffix distinguishes dual calibration and verdicts from historical runs.
-configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s_dualcal_simspec_corrcal", cv_folds, mismatch_repeats,
+configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s_dualcal_simspec_corrcal_nogeneral", cv_folds, mismatch_repeats,
                          target_specificity,
                          ifelse(mismatch_rate == "0.1", "", paste0("_swap", mismatch_rate)),
                          ifelse(margin_coverage == 0.025, "", paste0("_mc", margin_coverage)),
@@ -211,7 +211,7 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
     clean_accuracy_true = ratio(sum(p$predicted_id_clean[conf] == truth[conf]), sum(conf)),
     raw_accuracy_true = mean(p$predicted_id == truth),
     margin_threshold = r$thresholds$annotation_margin,
-    abstain_threshold = r$thresholds$abstain_margin,
+    correction_threshold = r$thresholds$correction_margin,
     exclusion_threshold = r$calibration$exclusion_margin_threshold,
     seconds = seconds
   )

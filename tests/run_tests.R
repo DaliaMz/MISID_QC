@@ -53,6 +53,14 @@ stopifnot(correction_threshold(simulated, 0.5)$threshold == 4)
 simulated$top_margin[2] <- 5
 stopifnot(is.infinite(correction_threshold(simulated, 0.9)$threshold),
           is.infinite(correction_threshold(NULL, 0.9)$threshold))
+confident_prediction <- get(".confident_prediction",
+                            asNamespace("SampleAnnotationLikelihood"))
+stopifnot(identical(confident_prediction(c("a", "b", "b", "b"),
+                                         rep("a", 4), c(0, 4, 5, 6), 5),
+                    c(TRUE, FALSE, TRUE, TRUE)),
+          identical(confident_prediction(c("a", "b"), c("a", "a"),
+                                         c(0, 100), Inf),
+                    c(TRUE, FALSE)))
 
 progress_messages <- character()
 withCallingHandlers(
@@ -93,7 +101,8 @@ stopifnot(all(is.na(result$predictions$predicted_id_clean[
 stopifnot(!anyNA(result$predictions$predicted_id))
 stopifnot(!any(!is.na(result$predictions$candidate_correction) &
                  !result$predictions$confident_prediction))
-stopifnot(length(result$calibration$abstain_reason_counts) == 2L)
+stopifnot(is.null(result$calibration$abstain_reason_counts),
+          is.null(result$thresholds$abstain_margin))
 stopifnot(identical(result$calibration$holdout_reference,
                     "all_alternatives"))
 top_reference <- check_annotations(
@@ -217,7 +226,7 @@ diagnostic_result <- check_annotations(
   diagnostics = TRUE
 )
 stopifnot(all(c("first_pass", "first_pass_scores", "final_pass",
-                "annotation_threshold", "abstention", "unknown", "gates") %in%
+                "annotation_threshold", "correction", "unknown", "gates") %in%
               names(diagnostic_result$diagnostics)))
 stopifnot(identical(
   diagnostic_result$diagnostics$first_pass$sample_id, samples
@@ -233,7 +242,8 @@ stopifnot("simulated_unchanged_negative" %in%
             diagnostic_result$diagnostics$annotation_threshold$population,
           diagnostic_result$performance$misannotation_detection$specificity >= 0.95,
           diagnostic_result$performance$misannotation_detection$simulated_specificity_in_sample >= 0.95)
-stopifnot(nrow(diagnostic_result$diagnostics$abstention$curve) > 0L)
+stopifnot(nrow(diagnostic_result$diagnostics$correction$curve) > 0L,
+          is.null(diagnostic_result$diagnostics$abstention))
 holdout_reference <- SampleAnnotationLikelihood:::.report_holdout_reference(diagnostic_result)
 stopifnot(isTRUE(all.equal(
   unname(quantile(holdout_reference, 0.025, type = 1)),
@@ -467,8 +477,7 @@ stopifnot(all(held_result$predictions$top_score_margin[
     held_result$thresholds$correction_margin))
 sim <- held_result$mismatch_simulation
 proposed <- sim$annotation_margin > held_result$thresholds$annotation_margin &
-  sim$top_margin >= max(held_result$thresholds$abstain_margin,
-                        held_result$thresholds$correction_margin) &
+  sim$top_margin >= held_result$thresholds$correction_margin &
   sim$simulated_id != sim$predicted_id
 stopifnot(held_result$performance$correction_validation$n_proposed == sum(proposed))
 if (any(proposed)) {
@@ -486,6 +495,42 @@ without_swaps <- check_annotations(
 stopifnot(without_swaps$feasibility$identity_recovery == "insufficient_evidence",
           is.infinite(without_swaps$thresholds$correction_margin),
           all(is.na(without_swaps$predictions$candidate_correction)))
+no_swap_predictions <- without_swaps$predictions
+no_swap_agrees <- no_swap_predictions$predicted_id == no_swap_predictions$observed_id
+stopifnot(any(no_swap_agrees), any(!no_swap_agrees),
+          all(!is.na(no_swap_predictions$predicted_id_clean[no_swap_agrees])),
+          all(is.na(no_swap_predictions$predicted_id_clean[!no_swap_agrees])))
+set.seed(4)
+unknown_gated <- check_annotations(
+  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+  "individual", min_agreement = 0, progress = FALSE, mismatch_repeats = 2,
+  margin_coverage = 0, detect_unknown = TRUE,
+  unknown_threshold_method = "mad", unknown_mad = 0
+)
+up <- unknown_gated$predictions
+eligible_unknown <- up$potential_unknown_individual & up$suspicious &
+  up$confident_prediction & up$predicted_id != up$observed_id
+stopifnot(unknown_gated$feasibility$identity_recovery == "appears_feasible",
+          any(eligible_unknown),
+          all(!is.na(up$predicted_id_clean[eligible_unknown])),
+          all(is.na(up$candidate_correction[eligible_unknown])),
+          all(!is.na(up$predicted_id_clean[
+            up$potential_unknown_individual & up$predicted_id == up$observed_id])))
+expected_candidates <- up$suspicious & up$confident_prediction &
+  !up$potential_unknown_individual & up$predicted_id != up$observed_id
+stopifnot(identical(!is.na(up$candidate_correction), expected_candidates))
+hp <- held_result$predictions
+expected_candidates <- hp$suspicious & hp$confident_prediction &
+  hp$predicted_id != hp$observed_id
+stopifnot(any(expected_candidates),
+          identical(!is.na(hp$candidate_correction), expected_candidates))
+usim <- unknown_gated$mismatch_simulation
+mad_proposed <- usim$annotation_margin > unknown_gated$thresholds$annotation_margin &
+  usim$top_margin >= max(unknown_gated$thresholds$correction_margin,
+                          unknown_gated$thresholds$unknown_margin) &
+  usim$simulated_id != usim$predicted_id
+stopifnot(unknown_gated$performance$correction_validation$n_proposed ==
+            sum(mad_proposed))
 dp <- held_result$predictions
 set.seed(4)
 held_rate_result <- check_annotations(

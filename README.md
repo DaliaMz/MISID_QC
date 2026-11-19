@@ -93,7 +93,7 @@ recall of proposed corrections are in `performance$recovery_accuracy_misannotate
 and `performance$correction_validation`.
 Other summaries use the same out-of-fold predictions for threshold selection and
 performance, so they are not independent estimates and should not be used as
-confirmed error rates. `annotation_status` is descriptive (flag, abstention,
+confirmed error rates. `annotation_status` is descriptive (flag, confidence,
 agreement) and is not overwritten by feasibility, which is reported separately
 in `results$feasibility`. All samples, including held-out samples, are
 `suspicious` only when their annotation margin exceeds the calibrated cutoff.
@@ -105,8 +105,14 @@ samples predicted as a different identity. The lowest top-margin cutoff reaching
 `calibration$correction_margin`. Swaps predicted as their simulated label are
 included, so this accuracy is not the precision of proposed corrections.
 Recovery appears feasible if such a cutoff exists and there are at least 20
-input samples; without swaps it is insufficient evidence. Candidates must also
-pass the existing suspicious, general prediction and unknown gates. There is no
+input samples; without swaps it is insufficient evidence. `predicted_id_clean`
+returns agreeing predictions and disagreements at or above the correction cutoff,
+even for unknown-flagged samples. Candidate corrections additionally require a
+suspicious flag and must not be flagged as unknown. Without a usable cutoff,
+disagreements have no clean prediction. The former general abstention threshold
+and its outputs have been removed. Simulated correction validation does not
+apply the default distance-based unknown gate or the feasibility verdict, so it
+does not exactly reproduce final candidates. There is no
 minimum retained simulation count: even one correct simulated row can meet the
 target. The cutoff and accuracy use the same simulations, whose rows may be
 dependent, so the estimate can be optimistic.
@@ -152,7 +158,7 @@ error rates or sample-level probabilities.
 The PDF plots boxplots of first-pass top and annotation margins for samples
 whose prediction matches vs. differs from the observed label (agreement is in
 the title), the first-pass exclusion margins,
-the annotation-threshold populations, abstention accuracy/coverage, unknown
+the annotation-threshold populations, correction accuracy/coverage, unknown
 individual margins, and feasibility gates. The first-pass table is kept
 separate from the final decisions. Diagnostics are opt-in because they retain
 additional intermediate score and margin data.

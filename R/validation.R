@@ -434,23 +434,6 @@
   scores
 }
 
-# Lowest top-margin cutoff at which agreement among retained samples
-# (margin at or above the cutoff) reaches `min_accuracy`.
-.abstention_threshold <- function(known_margin, known_correct, min_accuracy,
-                                  n_candidates = 200L) {
-  candidates <- sort(unique(known_margin))
-  if (length(candidates) > n_candidates) {
-    candidates <- candidates[unique(round(seq(1, length(candidates),
-                                              length.out = n_candidates)))]
-  }
-  accuracy <- vapply(candidates, function(cutoff) {
-    keep <- known_margin >= cutoff
-    if (!any(keep)) NA_real_ else mean(known_correct[keep])
-  }, numeric(1))
-  ok <- !is.na(accuracy) & accuracy >= min_accuracy
-  list(threshold = if (any(ok)) min(candidates[ok]) else Inf)
-}
-
 .correction_threshold <- function(simulation, min_accuracy) {
   empty <- list(threshold = Inf, n_eligible = 0L, n_retained = 0L,
                 coverage = NA_real_, accuracy = NA_real_)
@@ -469,4 +452,8 @@
   list(threshold = curve$threshold[chosen], n_eligible = nrow(selected),
        n_retained = curve$n_retained[chosen], coverage = curve$coverage[chosen],
        accuracy = curve$agreement[chosen])
+}
+
+.confident_prediction <- function(predicted, observed, margin, cutoff) {
+  predicted == observed | margin >= cutoff
 }

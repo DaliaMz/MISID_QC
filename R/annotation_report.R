@@ -318,7 +318,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
                     caption = paste0(
                       cutoff_caption, "; filtered n=", sum(eligible), ", all n=", nrow(sim),
                       ".\nSame coverage can mean different cutoffs; curves are in-sample.",
-                      "\nSuspicious, general prediction and unknown gates are not included.")) + theme
+                      "\nSuspicious, recovery-feasibility and unknown gates are not included.")) + theme
     if (has_cutoff) recovery_plot <- recovery_plot +
       ggplot2::geom_vline(xintercept = coverage, colour = "firebrick", linetype = "dashed")
   } else {
@@ -364,9 +364,9 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
                               "Final annotation margins",
                               paste("Dashed = calibrated cutoff; excluded from refit:", missing_refit),
                               "Annotation margin")
-  real_recovery <- histogram(final$top_score_margin, result$thresholds$abstain_margin,
+  real_recovery <- histogram(final$top_score_margin, result$thresholds$correction_margin,
                              "Final top margins",
-                             "Samples below cutoff abstain; unknown flags also cause abstention.",
+                             "Cutoff applies to disagreements; unknown flags block corrections, not clean predictions.",
                              "Top margin")
   real_unknown <- if (is.null(unknown)) {
     empty("Final unknown scores", "Requires diagnostics = TRUE")

@@ -61,18 +61,15 @@ sensitivity is in-sample.}
 \item{diagnostics}{Whether to include intermediate gate data in the result.
 This is intended for understanding and plotting the validation steps; it can
 add substantially to the result size.}
-\item{min_accuracy}{Target agreement among samples that receive a prediction.
-The abstention cutoff is the lowest top-versus-second margin at which simulated
-true-label agreement (observed agreement when the simulation is off) among
-retained samples reaches this value. Abstaining samples get \code{predicted_id_clean = NA}
-(\code{predicted_id} keeps the raw top candidate). They can still be flagged as
-suspicious when the annotation margin is large, but never receive a candidate
-correction; if the target is never reached, all samples abstain. A separate
-correction cutoff also uses this target, on swapped samples and unchanged
-samples whose predicted identity differs from their simulated label.}
+\item{min_accuracy}{Target agreement for selecting the correction cutoff on
+simulated swaps and unchanged samples predicted differently from their
+simulated label. Agreeing predictions are returned in \code{predicted_id_clean};
+disagreements are returned only at or above the correction cutoff. Without a
+usable cutoff, disagreements have \code{predicted_id_clean = NA}.
+\code{predicted_id} always retains the raw prediction.}
 \item{detect_unknown}{If \code{FALSE}, unknown-individual detection is switched
 off: no stranger validation is run, no sample is marked as a potential
-unknown individual, and abstention uses only the abstention cutoff.
+unknown individual.
 \code{feasibility$unknown_individual_detection} is \code{"not_assessed"}.}
 
 \item{unknown_threshold_method}{How the unknown-individual cutoff on the top
@@ -84,8 +81,9 @@ catching the most simulated strangers; with no simulated strangers it is the
 \code{target_specificity} quantile of the enrolled distances. \code{"mad"}
 restores the earlier rule, a cutoff on the top-versus-second margin of
 \code{median - unknown_mad * MAD} of the log top margin of enrolled samples,
-which uses no simulated strangers. Samples beyond the cutoff abstain and are
-marked as potential unknown individuals. No share
+which uses no simulated strangers. Samples beyond the cutoff are marked as
+potential unknown individuals and cannot receive candidate corrections; the
+flag does not hide \code{predicted_id_clean}. No share
 of samples is forced to be unknown.}
 \item{unknown_mad}{Multiplier used only when
 \code{unknown_threshold_method = "mad"}.}
@@ -108,7 +106,7 @@ out as confidently misassigned, from the first pass), \code{feasibility}, and
 \code{thresholds} components. \code{predictions$potential_unknown_individual} is a
 separate flag, not an \code{annotation_status} value. Predictions also include
 the nearest-class distance and the unknown-detection score and threshold.
-\code{predictions$annotation_status} is descriptive (flag, abstention,
+\code{predictions$annotation_status} is descriptive (flag, confidence,
 agreement) and does not depend on \code{feasibility}.
 All samples, including held-out samples, are flagged as suspicious only when
 their annotation margin exceeds the calibrated threshold. Every input sample has a row.
@@ -139,13 +137,16 @@ their simulated label, so this accuracy is not correction precision.
 \code{calibration$correction_margin} reports the threshold, retained count, coverage and
 in-sample accuracy. Recovery appears feasible if the cutoff exists and there are
 at least 20 input samples; without swaps it is insufficient evidence. Candidates
-must also pass the general prediction, unknown and suspicious gates. There is
+must also pass the unknown and suspicious gates. Simulated correction validation
+applies the margin-based unknown gate for \code{"mad"}, but not the default
+distance-based unknown gate because simulated swap distances are not recorded;
+it also does not apply feasibility. There is
 no minimum retained simulated count, so even one correct row can meet the
 target. Simulation rows can be dependent and in-sample cutoff selection can
 make the accuracy optimistic. If
 \code{diagnostics = TRUE}, the result also
 contains first-pass and final-pass sample margins, threshold populations,
-abstention-curve data, and gate inputs under \code{diagnostics}.
+correction-curve data, and gate inputs under \code{diagnostics}.
 }
 \description{
 Uses leave-one-sample-out shrinkage linear discriminant scores and internal

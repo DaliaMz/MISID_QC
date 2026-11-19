@@ -244,29 +244,10 @@ if (!is.null(simulation)) {
   ))
 }
 
-# ---- 12. Abstention and unknown-individual thresholds ----------------------
-known <- if (is.null(simulation)) {
-  list(margin = top_margin[reference], correct = correct_identity[reference])
-} else {
-  list(margin = simulation$top_margin, correct = simulation$agreement_real)
-}
-abstain_threshold <- .abstention_threshold(
-  known$margin, known$correct, min_accuracy
-)$threshold
-abstention_candidates <- sort(unique(known$margin))
-if (length(abstention_candidates) > 200L) {
-  abstention_candidates <- abstention_candidates[
-    unique(round(seq(1, length(abstention_candidates), length.out = 200L)))
-  ]
-}
-abstention_curve <- data.frame(
-  threshold = abstention_candidates,
-  n_retained = vapply(abstention_candidates, function(cutoff) {
-    sum(known$margin >= cutoff)
-  }, integer(1)),
-  agreement = vapply(abstention_candidates, function(cutoff) {
-    mean(known$correct[known$margin >= cutoff])
-  }, numeric(1))
+# ---- 12. Correction and unknown-individual thresholds ----------------------
+correction_threshold <- .correction_threshold(simulation, min_accuracy)
+confident_prediction <- .confident_prediction(
+  predicted_id, y, top_margin, correction_threshold$threshold
 )
 unknown_threshold <- if (!detect_unknown) {
   -Inf
@@ -288,12 +269,6 @@ is_unknown <- function(statistic) {
   else statistic < unknown_threshold
 }
 unknown_flag <- is_unknown(unknown_statistic)
-low_margin <- top_margin < abstain_threshold | unknown_flag
-confident_prediction <- !low_margin
-abstain_reason_counts <- c(
-  ambiguous_margin = sum(low_margin & !unknown_flag),
-  potential_unknown_individual = sum(unknown_flag)
-)
 unknown_metrics <- if (unknown$n) {
   .binary_metrics(
     c(rep(FALSE, sum(reference)), rep(TRUE, unknown$n)),
@@ -302,9 +277,8 @@ unknown_metrics <- if (unknown$n) {
       c(unknown_statistic[reference], stranger_statistic)
   )
 }
-cat(sprintf("abstain < %.4g, unknown < %.4g\n", abstain_threshold,
-            unknown_threshold))
-print(abstain_reason_counts)
+cat(sprintf("correction margin %.4g, unknown cutoff %.4g\n",
+            correction_threshold$threshold, unknown_threshold))
 
 # ---- 13. Flagging and detection metrics ------------------------------------
 flagged <- annotation_margin > margin_threshold
@@ -371,11 +345,10 @@ recovery_misannotated <- if (swap_simulation) {
 } else {
   NA_real_
 }
-correction_threshold <- .correction_threshold(simulation, min_accuracy)
 correction_validation <- if (!is.null(simulation)) {
   proposed <- simulation$annotation_margin > margin_threshold &
     simulation$top_margin >= max(
-      abstain_threshold, correction_threshold$threshold,
+      correction_threshold$threshold,
       if (use_distance || !detect_unknown) -Inf else unknown_threshold
     ) &
     !simulation$agreement_simulated
@@ -418,10 +391,8 @@ calibration <- list(
   method = "score_margin_threshold",
   margin_threshold = margin_threshold,
   exclusion_margin_threshold = top_margin_threshold,
-  abstain_margin_threshold = abstain_threshold,
   correction_margin = correction_threshold,
   prediction_coverage = mean(confident_prediction),
-  abstain_reason_counts = abstain_reason_counts,
   min_accuracy = min_accuracy,
   first_pass_agreement = first_pass_agreement,
   low_agreement = low_agreement,
@@ -528,8 +499,8 @@ str(feasibility)
 
 # ---- 19. Candidate corrections and annotation status -----------------------
 predictions$candidate_correction <- ifelse(
-  flagged & reliable_correction & confident_prediction &
-    top_margin >= correction_threshold$threshold & predicted_id != y,
+  flagged & reliable_correction & confident_prediction & !unknown_flag &
+    predicted_id != y,
   predicted_id, NA_character_
 )
 predictions$annotation_status <- ifelse(
@@ -561,7 +532,6 @@ result <- list(
     unknown_margin = if (use_distance || !detect_unknown) -Inf else
       unknown_threshold,
     unknown_distance = if (use_distance) unknown_threshold else Inf,
-    abstain_margin = abstain_threshold,
     correction_margin = correction_threshold$threshold,
     target_specificity = target_specificity
   )

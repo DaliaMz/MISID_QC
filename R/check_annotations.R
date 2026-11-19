@@ -60,19 +60,16 @@
 #' @param diagnostics Whether to include intermediate gate data in the result.
 #'   This is intended for understanding and plotting the validation steps; it
 #'   can add substantially to the result size.
-#' @param min_accuracy Target agreement among samples that receive a
-#'   prediction. The abstention cutoff is the lowest top-versus-second margin
-#'   at which simulated true-label agreement (observed agreement when the
-#'   simulation is off) among retained samples reaches this value. Abstaining
-#'   samples get `predicted_id_clean = NA` (`predicted_id` keeps the raw top
-#'   candidate). They can still be flagged as suspicious when the annotation
-#'   margin is large, but never receive a candidate correction; if the target is never reached, all
-#'   samples abstain. A separate correction cutoff also uses this target:
-#'   its simulation reference includes swapped samples and unchanged samples
-#'   whose predicted identity differs from their simulated label.
+#' @param min_accuracy Target agreement for selecting the correction cutoff.
+#'   The reference includes simulated swaps and unchanged samples whose
+#'   predicted identity differs from their simulated label. Agreeing predictions
+#'   are returned in `predicted_id_clean`; disagreements are returned there
+#'   only at or above the correction cutoff. Without a usable cutoff,
+#'   disagreements have `predicted_id_clean = NA`. `predicted_id` always
+#'   retains the raw prediction.
 #' @param detect_unknown If `FALSE`, unknown-individual detection is switched
 #'   off: no stranger validation is run, no sample is marked as a potential
-#'   unknown individual, and abstention uses only the abstention cutoff.
+#'   unknown individual.
 #'   `feasibility$unknown_individual_detection` is `"not_assessed"`.
 #' @param unknown_threshold_method How the unknown-individual cutoff on the top
 #'   statistic is chosen. `"simulated"` (default) uses the Mahalanobis
@@ -83,8 +80,9 @@
 #'   the `target_specificity` quantile of the enrolled distances. `"mad"`
 #'   restores the earlier rule, a cutoff on the top-versus-second margin of
 #'   `median - unknown_mad * MAD` of the log top margin of enrolled samples,
-#'   which uses no simulated strangers. Samples beyond the cutoff abstain and
-#'   are marked as potential unknown individuals.
+#'   which uses no simulated strangers. Samples beyond the cutoff are marked
+#'   as potential unknown individuals and cannot receive candidate corrections;
+#'   the flag does not hide `predicted_id_clean`.
 #'   No share of samples is forced to be unknown.
 #' @param unknown_mad Multiplier used only when
 #'   `unknown_threshold_method = "mad"`.
@@ -108,7 +106,7 @@
 #'   `thresholds` components. `predictions$potential_unknown_individual` is a
 #'   separate flag, not an `annotation_status` value. Predictions also include
 #'   the nearest-class distance and the unknown-detection score and threshold.
-#'   `predictions$annotation_status` is descriptive (flag, abstention,
+#'   `predictions$annotation_status` is descriptive (flag, confidence,
 #'   agreement) and does not depend on `feasibility`.
 #'   All samples, including held-out samples, are flagged as suspicious only
 #'   when their annotation margin exceeds the calibrated threshold. Every input
@@ -141,8 +139,11 @@
 #'   retained count, coverage and in-sample accuracy in `calibration$correction_margin`.
 #'   Identity recovery appears feasible when that cutoff exists and the input
 #'   has at least 20 samples; without swaps it is insufficient evidence.
-#'   Candidates must also pass the general prediction, unknown and suspicious
-#'   gates. There is no minimum retained simulated count; even one correct row
+#'   Candidates must also pass the unknown and suspicious gates. Simulated
+#'   correction validation applies the margin-based unknown gate for `"mad"`,
+#'   but not the default distance-based unknown gate because simulated swap
+#'   distances are not recorded; it also does not apply feasibility. There is
+#'   no minimum retained simulated count; even one correct row
 #'   can meet the target. Repeated rows are dependent, and selecting and
 #'   evaluating the cutoff on the same simulations can be optimistic.
 #' @export
@@ -432,35 +433,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     ))
   }
 
-  # Abstention: no prediction when the top margin is below a cutoff (ambiguous
-  # between enrolled individuals). The cutoff is the lowest margin at which
-  # agreement among retained samples reaches min_accuracy, with simulated
-  # true-label agreement preferred because observed labels may be wrong. The
-  # unknown cutoff is tuned on simulated strangers (or, with method "mad", a
-  # robust lower bound on enrolled top margins); unknowns always abstain too.
-  known <- if (is.null(simulation)) {
-    list(margin = top_margin[reference], correct = correct_identity[reference])
-  } else {
-    list(margin = simulation$top_margin, correct = simulation$agreement_real)
-  }
-  abstain_threshold <- .abstention_threshold(
-    known$margin, known$correct, min_accuracy
-  )$threshold
-  abstention_candidates <- sort(unique(known$margin))
-  if (length(abstention_candidates) > 200L) {
-    abstention_candidates <- abstention_candidates[
-      unique(round(seq(1, length(abstention_candidates),
-                       length.out = 200L)))
-    ]
-  }
-  abstention_curve <- data.frame(
-    threshold = abstention_candidates,
-    n_retained = vapply(abstention_candidates, function(cutoff) {
-      sum(known$margin >= cutoff)
-    }, integer(1)),
-    agreement = vapply(abstention_candidates, function(cutoff) {
-      mean(known$correct[known$margin >= cutoff])
-    }, numeric(1))
+  correction_threshold <- .correction_threshold(simulation, min_accuracy)
+  confident_prediction <- .confident_prediction(
+    predicted_id, y, top_margin, correction_threshold$threshold
   )
   unknown_threshold <- if (!detect_unknown) {
     -Inf
@@ -482,12 +457,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     else statistic < unknown_threshold
   }
   unknown_flag <- is_unknown(unknown_statistic)
-  low_margin <- top_margin < abstain_threshold | unknown_flag
-  confident_prediction <- !low_margin
-  abstain_reason_counts <- c(
-    ambiguous_margin = sum(low_margin & !unknown_flag),
-    potential_unknown_individual = sum(unknown_flag)
-  )
   unknown_metrics <- if (unknown$n) {
     .binary_metrics(
       c(rep(FALSE, sum(reference)), rep(TRUE, unknown$n)),
@@ -498,10 +467,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   if (isTRUE(progress)) {
     message(sprintf(
-      "Abstaining on %d of %d samples (margin < %.3g; %d potential unknown, %s %.3g) to keep agreement >= %.0f%%.",
-      sum(!confident_prediction), length(y), abstain_threshold,
+      "%d of %d samples lack a clean prediction (disagreement below correction margin %.3g); %d potential unknown (%s %.3g).",
+      sum(!confident_prediction), length(y), correction_threshold$threshold,
       sum(unknown_flag), if (use_distance) "distance >" else "margin <",
-      unknown_threshold, 100 * min_accuracy
+      unknown_threshold
     ))
   }
   # Flagging depends on the annotation margin alone: a clearly beaten observed
@@ -584,11 +553,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   } else {
     NA_real_
   }
-  correction_threshold <- .correction_threshold(simulation, min_accuracy)
   correction_validation <- if (!is.null(simulation)) {
     proposed <- simulation$annotation_margin > margin_threshold &
       simulation$top_margin >= max(
-        abstain_threshold, correction_threshold$threshold,
+        correction_threshold$threshold,
         if (use_distance || !detect_unknown) -Inf else unknown_threshold
       ) &
       !simulation$agreement_simulated
@@ -632,10 +600,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     margin_threshold = margin_threshold,
     exclusion_margin_threshold = top_margin_threshold,
     holdout_reference = holdout_reference,
-    abstain_margin_threshold = abstain_threshold,
     correction_margin = correction_threshold,
     prediction_coverage = mean(confident_prediction),
-    abstain_reason_counts = abstain_reason_counts,
     min_accuracy = min_accuracy,
     first_pass_agreement = first_pass_agreement,
     low_agreement = low_agreement,
@@ -767,7 +733,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   predictions$candidate_correction <- ifelse(
       flagged & reliable_correction &
-        confident_prediction & top_margin >= correction_threshold$threshold &
+        confident_prediction & !unknown_flag &
         predicted_id != y,
       predicted_id,
       NA_character_
@@ -801,7 +767,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       unknown_margin = if (use_distance || !detect_unknown) -Inf else
         unknown_threshold,
       unknown_distance = if (use_distance) unknown_threshold else Inf,
-      abstain_margin = abstain_threshold,
       correction_margin = correction_threshold$threshold,
       target_specificity = target_specificity
     )
@@ -886,6 +851,12 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     final_diagnostics$candidate_correction <- predictions$candidate_correction
     final_diagnostics$annotation_status <- predictions$annotation_status
 
+    correction_eligible <- if (is.null(simulation)) logical() else
+      simulation$actually_misannotated | !simulation$agreement_simulated
+    correction_curve <- if (any(correction_eligible)) {
+      .risk_coverage(simulation$top_margin[correction_eligible],
+                     simulation$agreement_real[correction_eligible])
+    } else NULL
     result$diagnostics <- list(
       first_pass = first_pass_diagnostics,
       first_pass_scores = first_pass_scores,
@@ -895,15 +866,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         !is.null(simulated_positive_margins) &&
         nrow(simulated_positive_margins)
       ) "simulated_swaps" else "all_wrong_identities",
-      abstention = list(
-        source = if (is.null(simulation)) "observed_reference" else
-          "simulated_true_labels",
-        threshold = abstain_threshold,
-        min_accuracy = min_accuracy,
-        curve = abstention_curve,
-        margins = known$margin,
-        correct = known$correct
-      ),
+      correction = list(threshold = correction_threshold$threshold,
+                        min_accuracy = min_accuracy,
+                        curve = correction_curve),
       unknown = list(
         enabled = detect_unknown,
         threshold = unknown_threshold,
