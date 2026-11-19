@@ -119,6 +119,71 @@
   if (denominator == 0) NA_real_ else numerator / denominator
 }
 
+.estimate_detection_errors <- function(flagged, sensitivity, specificity, source) {
+  result <- list(
+    status = "unavailable", reason = NULL, n_samples = length(flagged),
+    n_flagged = sum(flagged), sensitivity = sensitivity,
+    specificity = specificity, source = source,
+    prevalence = NA_real_, scenarios = NULL
+  )
+  if (!source %in% c("simulated_swaps_cross_fitted", "simulated_swaps_in_sample") ||
+      length(sensitivity) != 1L || length(specificity) != 1L ||
+      !is.finite(sensitivity) || !is.finite(specificity)) {
+    result$reason <- "Simulated swap sensitivity and specificity are unavailable."
+    return(result)
+  }
+  separation <- sensitivity + specificity - 1
+  if (separation <= 0) {
+    result$reason <- "Simulated sensitivity and specificity cannot distinguish errors."
+    return(result)
+  }
+  flag_rate <- mean(flagged)
+  false_positive_rate <- 1 - specificity
+  tolerance <- 16 * .Machine$double.eps
+  if (!is.finite(flag_rate) ||
+      flag_rate < false_positive_rate - tolerance ||
+      flag_rate > sensitivity + tolerance) {
+    result$reason <- "The observed flag rate is incompatible with the simulated rates."
+    return(result)
+  }
+  prevalence <- max(0, min(1, (flag_rate - false_positive_rate) / separation))
+  rates <- c(max(0, prevalence - 0.025), prevalence,
+             min(1, prevalence + 0.025))
+  result$status <- "available"
+  result$prevalence <- prevalence
+  result$scenarios <- data.frame(
+    scenario = c("lower", "estimate", "upper"),
+    prevalence = rates,
+    expected_false_positives = length(flagged) * (1 - rates) * (1 - specificity),
+    expected_false_negatives = length(flagged) * rates * (1 - sensitivity)
+  )
+  result
+}
+
+.format_detection_error_estimate <- function(estimate) {
+  if (is.null(estimate)) {
+    return("Estimated detection errors unavailable (not present in this result).")
+  }
+  if (!identical(estimate$status, "available")) {
+    return(paste("Estimated detection errors unavailable:", estimate$reason))
+  }
+  scenarios <- estimate$scenarios
+  center <- scenarios[scenarios$scenario == "estimate", ]
+  c(
+    sprintf("Estimated misannotation rate: %.1f%% (assumed range %.1f%%-%.1f%%).",
+            100 * center$prevalence, 100 * scenarios$prevalence[1L],
+            100 * scenarios$prevalence[3L]),
+    sprintf("Projected false positives: %.1f (range %.1f-%.1f).",
+            center$expected_false_positives,
+            min(scenarios$expected_false_positives), max(scenarios$expected_false_positives)),
+    sprintf("Projected missed misannotations: %.1f (range %.1f-%.1f).",
+            center$expected_false_negatives,
+            min(scenarios$expected_false_negatives), max(scenarios$expected_false_negatives)),
+    "Exploratory projections, not confidence intervals. Swaps may not represent",
+    "real errors or unknown individuals."
+  )
+}
+
 .binary_metrics <- function(positive, flagged, score = NULL) {
   tp <- sum(positive & flagged)
   tn <- sum(!positive & !flagged)

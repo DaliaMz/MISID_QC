@@ -53,6 +53,8 @@ utils::globalVariables(c("x", "y", "rate", "metric", "group", "held"))
 #'
 #' Internal validation uses simulated errors and is not ground truth or a
 #' sample-level probability. First-pass agreement is with observed labels.
+#' Estimated detection errors are exploratory projections, not confidence
+#' intervals; simulated swaps may not represent real errors or unknown people.
 #'
 #' @param result A result from [check_annotations()].
 #' @param file Path to the PDF to create.
@@ -168,6 +170,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
             result$held_out$n_confidently_misassigned),
     sprintf("Detection: %s | sensitivity %s | simulated specificity %s",
             verdict("misannotation_detection"), pct(det$sensitivity), pct(det$simulated_specificity)),
+    .format_detection_error_estimate(result$performance$estimated_detection_errors),
     sprintf("Detection cutoff: %s | target specificity: %s",
             num(result$thresholds$annotation_margin), pct(result$thresholds$target_specificity)),
     sprintf("Recovery: %s | simulated mislabel accuracy %s | cutoff %s",

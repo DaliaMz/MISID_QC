@@ -118,6 +118,15 @@
 #'   is `"insufficient_evidence"`. With one repeat both rates are in-sample.
 #'   Precision, accuracy and ranking metrics in that table use the reference
 #'   negatives and final cutoff.
+#'   `performance$estimated_detection_errors` estimates misannotation
+#'   prevalence from the observed suspicious-flag rate and simulated swap
+#'   sensitivity and specificity. It projects false positives and missed
+#'   misannotations at that estimate and at +/- 2.5 percentage points,
+#'   bounded to 0--100%. These are exploratory projections, not confidence
+#'   intervals or sample-level probabilities; simulated swaps may not
+#'   represent real errors or unknown individuals. It is unavailable when
+#'   simulated rates are missing, uninformative, or incompatible with the
+#'   observed flag rate. Set `progress = TRUE` to display the summary.
 #'   `performance$all_alternatives_detection`
 #'   keeps the every-wrong-label diagnostic, and
 #'   `performance$recovery_accuracy_misannotated` and
@@ -544,6 +553,14 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     crossfit$n_repeats
   }
   misannotation_metrics$source <- detection_source
+  estimated_detection_errors <- .estimate_detection_errors(
+    flagged, misannotation_metrics$sensitivity,
+    misannotation_metrics$simulated_specificity, detection_source
+  )
+  if (isTRUE(progress)) {
+    message(paste(.format_detection_error_estimate(estimated_detection_errors),
+                  collapse = "\n"))
+  }
   # Overall agreement: each sample is scored against every wrong label equally
   # often, so this equals the all-alternatives recovery.
   identity_recovery <- mean(correct_identity)
@@ -666,6 +683,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     correct_identity_recovery_accuracy = mean(correct_identity),
     top_three_identity_recovery_accuracy = mean(top_three),
     misannotation_detection = misannotation_metrics,
+    estimated_detection_errors = estimated_detection_errors,
     all_alternatives_detection = all_alternatives_metrics,
     identity_recovery_accuracy = identity_recovery,
     recovery_accuracy_misannotated = recovery_misannotated,

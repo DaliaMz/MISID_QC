@@ -50,6 +50,8 @@ withCallingHandlers(
 stopifnot(any(grepl("Leave-one-sample-out models", progress_messages)))
 stopifnot(any(grepl("held-out individuals", progress_messages,
                     ignore.case = TRUE)))
+stopifnot(any(grepl("Estimated detection errors unavailable|Estimated misannotation rate",
+                    progress_messages)))
 stopifnot(nrow(result$predictions) == length(ids))
 stopifnot(all(c("potential_unknown_individual", "nearest_class_distance",
                 "unknown_detection_score", "unknown_detection_threshold") %in%
@@ -104,6 +106,43 @@ stopifnot(all(c("all_alternatives_detection",
 stopifnot(result$performance$misannotation_detection$source %in%
             c("simulated_swaps_cross_fitted", "simulated_swaps_in_sample"))
 stopifnot(result$performance$misannotation_detection$n_repeats_validated <= 3L)
+
+estimate_errors <- SampleAnnotationLikelihood:::.estimate_detection_errors
+estimate <- estimate_errors(c(rep(TRUE, 12), rep(FALSE, 88)), 0.8, 0.95,
+                            "simulated_swaps_cross_fitted")
+stopifnot(estimate$status == "available",
+          isTRUE(all.equal(estimate$prevalence, 7 / 75)),
+          isTRUE(all.equal(estimate$scenarios$prevalence,
+                           7 / 75 + c(-0.025, 0, 0.025))),
+          isTRUE(all.equal(estimate$scenarios$expected_false_positives[2], 68 / 15)),
+          isTRUE(all.equal(estimate$scenarios$expected_false_negatives[2], 28 / 15)))
+boundary <- estimate_errors(rep(FALSE, 100), 0.8, 1, "simulated_swaps_in_sample")
+stopifnot(boundary$status == "available",
+          identical(boundary$scenarios$prevalence[1], 0))
+boundary <- estimate_errors(c(rep(TRUE, 5), rep(FALSE, 95)), 0.8, 0.95,
+                            "simulated_swaps_in_sample")
+stopifnot(boundary$status == "available", boundary$prevalence == 0)
+boundary <- estimate_errors(rep(TRUE, 100), 1, 0.95, "simulated_swaps_in_sample")
+stopifnot(boundary$status == "available",
+          identical(boundary$scenarios$prevalence[3], 1))
+stopifnot(estimate_errors(rep(FALSE, 100), 0.8, 0.95,
+                          "simulated_swaps_cross_fitted")$status == "unavailable",
+          estimate_errors(rep(FALSE, 100), 0.05, 0.95,
+                          "simulated_swaps_in_sample")$status == "unavailable",
+          estimate_errors(rep(FALSE, 100), 0.8, NA_real_,
+                          "simulated_swaps_in_sample")$status == "unavailable",
+          estimate_errors(rep(FALSE, 100), 0.8, 0.95,
+                          "all_wrong_identities")$status == "unavailable")
+estimate <- result$performance$estimated_detection_errors
+stopifnot(estimate$n_flagged == sum(result$predictions$suspicious),
+          estimate$source == result$performance$misannotation_detection$source)
+if (estimate$status == "available") {
+  stopifnot(isTRUE(all.equal(
+    estimate$prevalence,
+    (mean(result$predictions$suspicious) - (1 - estimate$specificity)) /
+      (estimate$sensitivity + estimate$specificity - 1)
+  )))
+}
 
 # Feasibility never overwrites sample statuses.
 no_feasibility <- check_annotations(
@@ -201,6 +240,12 @@ report_file <- tempfile(fileext = ".pdf")
 annotation_report(no_feasibility, report_file)
 stopifnot(file.exists(report_file), file.info(report_file)$size > 0)
 unlink(report_file)
+older_result <- no_feasibility
+older_result$performance$estimated_detection_errors <- NULL
+report_file <- tempfile(fileext = ".pdf")
+annotation_report(older_result, report_file)
+stopifnot(file.exists(report_file), file.info(report_file)$size > 0)
+unlink(report_file)
 unknown_off <- check_annotations(
   expression, metadata, "sample", "individual", progress = FALSE,
   detect_unknown = FALSE, diagnostics = TRUE
@@ -266,7 +311,8 @@ for (disabled_rate in list(0, NULL)) {
     mismatch_rate = disabled_rate, detect_unknown = FALSE
   )
   stopifnot(is.null(disabled$mismatch_simulation),
-            is.null(disabled$calibration$mismatch_simulation))
+            is.null(disabled$calibration$mismatch_simulation),
+            disabled$performance$estimated_detection_errors$status == "unavailable")
 }
 set.seed(12)
 held_zero <- check_annotations(

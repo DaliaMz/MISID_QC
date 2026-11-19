@@ -68,6 +68,20 @@ cross-fitted by repeat when possible, and in-sample with one repeat; without
 simulated positives or unchanged samples the verdict is insufficient evidence.
 `performance$misannotation_detection$simulated_specificity` is the verdict
 estimate, while `specificity` is the original reference specificity.
+`performance$estimated_detection_errors` uses the observed suspicious-flag
+fraction and these simulated rates to estimate the misannotation fraction:
+`(flag fraction - (1 - specificity)) / (sensitivity + specificity - 1)`.
+It projects the numbers of false positives and missed misannotations at that
+estimate and at +/- 2.5 percentage points, bounded to 0--100%. These are
+expected counts under each assumed prevalence, not confidence intervals or
+guaranteed counts; the alternative assumptions need not reproduce the observed
+flag count. Estimates are unavailable when simulated rates are missing, do not
+distinguish errors, or imply a prevalence outside 0--100%. When sensitivity
+and specificity barely distinguish errors, the estimate can be highly unstable.
+Cross-fitted rates use cutoffs from other repeats, which can differ from the
+final cutoff used for the observed flags; a single repeat uses in-sample rates.
+Swaps may not represent real misannotations, especially unknown individuals.
+The report includes the estimates; `progress = TRUE` also displays them.
 The report's cutoff curves show in-sample rates; cross-fitted specificity
 can be below the target even when the calibration rates meet it.
 The every-wrong-label and

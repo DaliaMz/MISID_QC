@@ -152,8 +152,15 @@ pair even when the fraction is zero. Summaries record `swap_rate_target` and
 `swap_rate_actual`; the package default remains 0.1. For example:
 
 ```sh
-RUN_ARGS='cv_folds=5 mismatch_rate=0.1,held_out' qsub simulations/run_gtex.pbs
-RUN_ARGS='cv_folds=5 mismatch_rate=0.1,held_out' qsub simulations/run_sims.pbs
+RUN_ARGS='cv_folds=5 mismatch_rate=0.1,held_out out=simulations/results_mismatch_rate' qsub simulations/run_gtex.pbs
+RUN_ARGS='cv_folds=5 mismatch_rate=0.1,held_out out=simulations/results_mismatch_rate' qsub simulations/run_sims.pbs
+```
+
+After the jobs finish, combine results from the same directory:
+
+```sh
+Rscript simulations/Aggregate_gtex_results.R out=simulations/results_mismatch_rate
+Rscript simulations/Run_across_simulated_data.R combine=TRUE out=simulations/results_mismatch_rate
 ```
 
 ## GTEx benchmark scenarios and settings

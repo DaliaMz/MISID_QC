@@ -357,6 +357,12 @@ misannotation_metrics$n_repeats_validated <-
   if (is.null(crossfit)) 0L else crossfit$n_repeats
 misannotation_metrics$source <- detection_source
 str(misannotation_metrics)
+estimated_detection_errors <- .estimate_detection_errors(
+  flagged, misannotation_metrics$sensitivity,
+  misannotation_metrics$simulated_specificity, detection_source
+)
+cat(paste(.format_detection_error_estimate(estimated_detection_errors),
+          collapse = "\n"), "\n")
 
 # ---- 14. Identity recovery and correction validation -----------------------
 identity_recovery <- mean(correct_identity)
@@ -436,6 +442,7 @@ performance <- list(
   correct_identity_recovery_accuracy = mean(correct_identity),
   top_three_identity_recovery_accuracy = mean(top_three),
   misannotation_detection = misannotation_metrics,
+  estimated_detection_errors = estimated_detection_errors,
   all_alternatives_detection = all_alternatives_metrics,
   identity_recovery_accuracy = identity_recovery,
   recovery_accuracy_misannotated = recovery_misannotated,

@@ -117,7 +117,18 @@ their annotation margin exceeds the calibrated threshold. Every input sample has
 uses simulated sensitivity and simulated specificity; without simulated
 specificity it is \code{"insufficient_evidence"}. With one repeat both rates
 are in-sample. Precision, accuracy and ranking metrics in that table use the
-reference negatives and final cutoff. \code{performance$all_alternatives_detection} keeps the
+reference negatives and final cutoff.
+\code{performance$estimated_detection_errors} estimates misannotation prevalence
+from the observed suspicious-flag fraction and simulated swap sensitivity and
+specificity, then projects false positives and missed misannotations at that
+estimate and at +/- 2.5 percentage points, bounded to 0--100\%. The projections
+are not confidence intervals or sample-level probabilities. They are unavailable
+when the simulated rates are missing, uninformative or incompatible with the
+observed flag rate. Swap simulations may not represent real errors or unknown
+individuals; nearly uninformative rates can yield unstable estimates. The
+alternative prevalence assumptions need not reproduce the observed flag count.
+Set \code{progress = TRUE} to display the summary.
+\code{performance$all_alternatives_detection} keeps the
 every-wrong-label diagnostic, and \code{performance$recovery_accuracy_misannotated}
 and \code{performance$correction_validation} report recovery on simulated
 misannotated samples and the precision and recall of proposed corrections.

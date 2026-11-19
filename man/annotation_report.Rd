@@ -18,5 +18,7 @@ sample distributions. Run \code{\link{check_annotations}} with
 \details{
 Internal validation uses simulated errors and is not ground truth or a
 sample-level probability. First-pass agreement is with observed labels.
+Estimated detection errors are exploratory projections, not confidence
+intervals; simulated swaps may not represent real errors or unknown people.
 Margins and unknown scores are plotted on their original scales.
 }
