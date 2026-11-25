@@ -56,6 +56,69 @@ result <- suppressWarnings(synthetic$check_annotations(
 ))
 stopifnot(nrow(result$predictions) == nrow(generated$meta),
           !is.null(result$performance$unknown_individual_detection))
+for (unknown_method in c("mad", "knn", "global_mahalanobis", "pca_residual")) {
+  set.seed(42)
+  candidate <- synthetic$check_annotations(
+    t(generated$X), as.data.frame(generated$meta), "sample", "label_observed",
+    progress = FALSE, min_agreement = 0, mismatch_rate = 0,
+    detect_unknown = TRUE, unknown_threshold_method = unknown_method,
+    diagnostics = TRUE
+  )
+  statistic <- candidate$diagnostics$unknown$statistic
+  expected <- switch(unknown_method,
+    mad = "top_margin",
+    knn = "nearest_training_distance",
+    global_mahalanobis = "global_mahalanobis",
+    pca_residual = "pca_reconstruction_residual"
+  )
+  stopifnot(nrow(candidate$predictions) == nrow(generated$meta),
+            identical(statistic, expected),
+            all(is.finite(candidate$predictions$unknown_detection_score)),
+            length(candidate$diagnostics$unknown$known_values) > 0L,
+            length(candidate$diagnostics$unknown$simulated_unknown_values) > 0L)
+}
+covariate_meta <- as.data.frame(generated$meta)
+covariate_meta$tissue <- rep(c("tissue_a", "tissue_b"),
+                             length.out = nrow(covariate_meta))
+set.seed(42)
+covariate_result <- synthetic$check_annotations(
+  t(generated$X), covariate_meta, "sample", "label_observed",
+  progress = FALSE, min_agreement = 0, mismatch_rate = 0,
+  detect_unknown = TRUE, covariate_col = "tissue"
+)
+stopifnot(
+  identical(covariate_result$covariate_adjustment$method, "residualize"),
+  identical(covariate_result$covariate_adjustment$covariates$tissue$type,
+            "categorical"),
+  setequal(covariate_result$covariate_adjustment$covariates$tissue$levels,
+           c("tissue_a", "tissue_b")),
+  nrow(covariate_result$predictions) == nrow(covariate_meta),
+  identical(covariate_result$calibration$covariate_method, "residualize")
+)
+covariate_x <- matrix(c(1, 3, 5, 7, 2, 4, 6, 8), nrow = 4L)
+covariate_residual <- synthetic$.covariate_residualize(
+  covariate_x,
+  data.frame(tissue = c("a", "a", "b", "b"))
+)
+stopifnot(
+  max(abs(colMeans(covariate_residual[c(1, 2), , drop = FALSE]))) < 1e-10,
+  max(abs(colMeans(covariate_residual[c(3, 4), , drop = FALSE]))) < 1e-10
+)
+missing_covariate_meta <- covariate_meta
+missing_covariate_meta$tissue[1] <- NA_character_
+stopifnot(inherits(try(synthetic$check_annotations(
+  t(generated$X), missing_covariate_meta, "sample", "label_observed",
+  progress = FALSE, covariate_col = "tissue"
+), silent = TRUE), "try-error"))
+stopifnot(inherits(try(synthetic$check_annotations(
+  t(generated$X), covariate_meta, "sample", "label_observed",
+  progress = FALSE, covariate_col = "missing_column"
+), silent = TRUE), "try-error"))
+stopifnot(inherits(try(synthetic$check_annotations(
+  t(generated$X), as.data.frame(generated$meta), "sample", "label_observed",
+  progress = FALSE, detect_unknown = TRUE,
+  unknown_threshold_method = "not_a_method"
+), silent = TRUE), "try-error"))
 stopifnot(inherits(try(synthetic$simulate_dataset(
   "gaussian", 0.2, 0, 0, n_per_label = 6,
   unknown_samples_per_individual = 7

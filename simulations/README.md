@@ -81,6 +81,22 @@ absent class or disabled detection gives `NA` for the corresponding rate.
 The existing misannotation and recovery metrics still group unknowns together
 with enrolled-label swaps.
 
+The synthetic runner also accepts
+`unknown_threshold_method=simulated,mad,knn,global_mahalanobis,pca_residual`.
+`simulated` is the existing nearest-class Mahalanobis rule,
+`mad` is the robust top-margin rule, `knn` compares against nearby training
+residuals, `global_mahalanobis` uses distance from the pooled cohort center,
+and `pca_residual` measures reconstruction residual outside leading pooled
+within-class principal components. Method choices are included in synthetic
+config names only when detection is enabled.
+
+The package and both runners can residualize fixed-effect covariates before
+modelling. Pass `covariate_col=tissue` to a runner for one metadata column, or
+a comma-separated list for multiple columns. The synthetic runner exposes
+`batch` and `time`; the GTEx runner exposes `tissue` (`SMTSD`) and `SMTS`.
+Covariate names are included in runner config names so adjusted and unadjusted
+results are not mixed.
+
 Existing saved results can be scored without refitting:
 
 ```sh

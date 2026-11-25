@@ -57,6 +57,13 @@
 #'   and unchanged samples and the reference negatives. More repeats give a less extreme
 #'   cutoff and a steadier sensitivity estimate at the cost of roughly
 #'   proportional simulation time. With 1, sensitivity is in-sample.
+#' @param covariate_col Optional metadata column name, or character vector of
+#'   names, used to residualize expression before individual modelling. Categorical
+#'   covariates are fitted as fixed effects and numeric covariates as linear
+#'   effects. Covariates are removed without using individual identities or
+#'   mislabel/unknown truth, and missing covariate values are rejected.
+#' @param covariate_method Fixed-effect covariate modelling method. Currently
+#'   only `"residualize"` is supported.
 #' @param diagnostics Whether to include intermediate gate data in the result.
 #'   This is intended for understanding and plotting the validation steps; it
 #'   can add substantially to the result size.
@@ -71,17 +78,15 @@
 #'   off: no stranger validation is run, no sample is marked as a potential
 #'   unknown individual.
 #'   `feasibility$unknown_individual_detection` is `"not_assessed"`.
-#' @param unknown_threshold_method How the unknown-individual cutoff on the top
-#'   statistic is chosen. `"simulated"` (default) uses the Mahalanobis
-#'   distance (under the shrinkage covariance) from a sample to its nearest
-#'   enrolled individual's mean, with the cutoff chosen so at most
-#'   `1 - target_specificity` of enrolled reference samples exceed it while
-#'   catching the most simulated strangers; with no simulated strangers it is
-#'   the `target_specificity` quantile of the enrolled distances. `"mad"`
-#'   restores the earlier rule, a cutoff on the top-versus-second margin of
-#'   `median - unknown_mad * MAD` of the log top margin of enrolled samples,
-#'   which uses no simulated strangers. Samples beyond the cutoff are marked
-#'   as potential unknown individuals and cannot receive candidate corrections;
+#' @param unknown_threshold_method How the unknown-individual cutoff is chosen.
+#'   `"simulated"` (default) uses the nearest-class Mahalanobis distance.
+#'   `"mad"` restores the robust top-margin rule. `"knn"` uses distance to
+#'   nearby in-class training residuals, `"global_mahalanobis"` uses distance
+#'   from the pooled cohort center, and `"pca_residual"` uses reconstruction
+#'   residual outside leading pooled within-class principal components.
+#'   Non-MAD methods use the target-specificity quantile and simulated stranger
+#'   scores to select an upper cutoff. Samples beyond the cutoff are marked as
+#'   potential unknown individuals and cannot receive candidate corrections;
 #'   the flag does not hide `predicted_id_clean`.
 #'   No share of samples is forced to be unknown.
 #' @param unknown_mad Multiplier used only when
@@ -100,7 +105,7 @@
 #'   `unknown_threshold_method = "simulated"` it also affects the unknown
 #'   cutoff.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
-#'   `performance`, `calibration`, `risk_coverage` (see
+#'   `performance`, `calibration`, `covariate_adjustment`, `risk_coverage` (see
 #'   [plot_risk_coverage()]), `mismatch_simulation`, `unknown_simulation`,
 #'   `unknown_simulation_scores`, `held_out` (count, fraction and IDs of samples held out as
 #'   confidently misassigned, from the first pass), `feasibility`, and
@@ -167,13 +172,18 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               holdout_reference = c("all_alternatives", "top"),
                               mismatch_rate = 0.1,
                               min_accuracy = 0.9, detect_unknown = TRUE,
-                              unknown_threshold_method = c("simulated", "mad"),
+                              unknown_threshold_method = c("simulated", "mad", "knn",
+                                                           "global_mahalanobis",
+                                                           "pca_residual"),
                               unknown_mad = 3,
                               grouped_unknown_validation = FALSE,
                               unknown_stray_samples = 2L,
                               mismatch_repeats = 3L,
+                              covariate_col = NULL,
+                              covariate_method = c("residualize"),
                               diagnostics = FALSE) {
   unknown_threshold_method <- match.arg(unknown_threshold_method)
+  covariate_method <- match.arg(covariate_method)
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -200,6 +210,18 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   }
   metadata <- metadata[match(colnames(expr), sample_ids), , drop = FALSE]
   y <- as.character(metadata[[id_col]])
+  if (!is.null(covariate_col)) {
+    if (!is.character(covariate_col) || !length(covariate_col) ||
+        anyNA(covariate_col) || any(!nzchar(covariate_col)) ||
+        anyDuplicated(covariate_col)) {
+      stop("covariate_col must be NULL or a character vector of unique, non-empty metadata column names.")
+    }
+    missing_covariates <- setdiff(covariate_col, names(metadata))
+    if (length(missing_covariates)) {
+      stop("covariate_col is missing from metadata: ",
+           paste(missing_covariates, collapse = ", "))
+    }
+  }
   class_counts <- table(y)
   if (length(class_counts) < 2L || any(class_counts < 2L)) {
     stop("At least two individuals with at least two samples each are required.")
@@ -251,11 +273,35 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
 
   x <- t(expr)
   rownames(x) <- colnames(expr)
+  covariate_summary <- NULL
+  if (!is.null(covariate_col)) {
+    covariates <- metadata[, covariate_col, drop = FALSE]
+    x <- .covariate_residualize(x, covariates)
+    covariate_summary <- lapply(covariate_col, function(column) {
+      value <- metadata[[column]]
+      list(
+        column = column,
+        type = if (is.numeric(value)) "numeric" else "categorical",
+        levels = if (is.numeric(value)) NULL else sort(unique(as.character(value))),
+        n_levels = if (is.numeric(value)) NA_integer_ else length(unique(as.character(value)))
+      )
+    })
+    names(covariate_summary) <- covariate_col
+    if (isTRUE(progress)) {
+      message(sprintf(
+        "Residualizing expression against covariates: %s.",
+        paste(covariate_col, collapse = ", ")
+      ))
+    }
+  }
   oof_scores <- matrix(
     NA_real_, nrow = nrow(x), ncol = length(class_counts),
     dimnames = list(rownames(x), names(class_counts))
   )
   nearest_distance <- rep(NA_real_, nrow(x))
+  global_mahalanobis <- rep(NA_real_, nrow(x))
+  pca_residual <- rep(NA_real_, nrow(x))
+  nearest_training_distance <- rep(NA_real_, nrow(x))
   n_folds <- if (is.null(cv_folds)) nrow(x) else as.integer(cv_folds)
   fold_id <- if (is.null(cv_folds)) {
     seq_len(nrow(x))
@@ -288,6 +334,15 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       model, x[test, , drop = FALSE]
     )
     nearest_distance[test] <- .nearest_class_distance(
+      model, x[test, , drop = FALSE]
+    )
+    global_mahalanobis[test] <- .global_mahalanobis_distance(
+      model, x[test, , drop = FALSE]
+    )
+    pca_residual[test] <- .pca_reconstruction_residual(
+      model, x[test, , drop = FALSE]
+    )
+    nearest_training_distance[test] <- .nearest_training_distance(
       model, x[test, , drop = FALSE]
     )
     if (isTRUE(progress) &&
@@ -383,7 +438,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     }
   )
   unknown <- if (!detect_unknown) {
-    list(n = 0L, top_margin = numeric())
+    list(n = 0L, top_margin = numeric(), distance = numeric(),
+         global_mahalanobis = numeric(), pca_residual = numeric(),
+         knn = numeric())
   } else {
     validate_unknown()
   }
@@ -453,16 +510,49 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     -Inf
   } else if (unknown_threshold_method == "mad") {
     .unknown_margin_threshold(top_margin[reference], unknown_mad)
+  } else if (unknown_threshold_method == "knn") {
+    .select_threshold(nearest_training_distance[reference], unknown$knn,
+                      target_specificity, "upper")
+  } else if (unknown_threshold_method == "global_mahalanobis") {
+    .select_threshold(global_mahalanobis[reference],
+                      unknown$global_mahalanobis,
+                      target_specificity, "upper")
+  } else if (unknown_threshold_method == "pca_residual") {
+    .select_threshold(pca_residual[reference], unknown$pca_residual,
+                      target_specificity, "upper")
   } else {
     .select_threshold(nearest_distance[reference], unknown$distance,
                       target_specificity, "upper")
   }
-  # "mad" flags a low top margin; "simulated" flags a large distance to the
-  # nearest enrolled individual.
-  use_distance <- detect_unknown && unknown_threshold_method == "simulated"
-  unknown_statistic <- if (use_distance) nearest_distance else top_margin
-  stranger_statistic <- if (use_distance) unknown$distance else
+  # "mad" flags a low top margin; all other enabled methods flag a large
+  # upper-tail statistic.
+  use_distance <- detect_unknown && unknown_threshold_method != "mad"
+  unknown_statistic <- if (!detect_unknown) {
+    rep(NA_real_, length(y))
+  } else if (unknown_threshold_method == "mad") {
+    top_margin
+  } else if (unknown_threshold_method == "knn") {
+    nearest_training_distance
+  } else if (unknown_threshold_method == "global_mahalanobis") {
+    global_mahalanobis
+  } else if (unknown_threshold_method == "pca_residual") {
+    pca_residual
+  } else {
+    nearest_distance
+  }
+  stranger_statistic <- if (!detect_unknown) {
+    numeric()
+  } else if (unknown_threshold_method == "mad") {
     unknown$top_margin
+  } else if (unknown_threshold_method == "knn") {
+    unknown$knn
+  } else if (unknown_threshold_method == "global_mahalanobis") {
+    unknown$global_mahalanobis
+  } else if (unknown_threshold_method == "pca_residual") {
+    unknown$pca_residual
+  } else {
+    unknown$distance
+  }
   is_unknown <- function(statistic) {
     if (!detect_unknown) rep(FALSE, length(statistic))
     else if (use_distance) statistic > unknown_threshold
@@ -613,6 +703,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
 
   calibration <- list(
     method = "score_margin_threshold",
+    covariates = covariate_summary,
+    covariate_method = if (is.null(covariate_summary)) NULL else covariate_method,
     margin_threshold = margin_threshold,
     exclusion_margin_threshold = top_margin_threshold,
     holdout_reference = holdout_reference,
@@ -656,6 +748,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     top_score_margin = top_margin,
     annotation_score_margin = annotation_margin,
     nearest_class_distance = nearest_distance,
+    global_mahalanobis_distance = global_mahalanobis,
+    pca_reconstruction_residual = pca_residual,
+    nearest_training_distance = nearest_training_distance,
     unknown_detection_score = if (detect_unknown) unknown_statistic else
       rep(NA_real_, length(y)),
     unknown_detection_threshold = if (detect_unknown) {
@@ -760,6 +855,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   result <- list(
     predictions = predictions,
     identity_scores = oof_scores,
+    covariate_adjustment = if (is.null(covariate_summary)) NULL else list(
+      method = covariate_method,
+      covariates = covariate_summary
+    ),
     performance = performance,
     calibration = calibration,
     risk_coverage = risk_coverage,
@@ -883,8 +982,13 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       unknown = list(
         enabled = detect_unknown,
         threshold = unknown_threshold,
-        statistic = if (use_distance) "nearest_class_distance" else
-          "top_margin",
+        statistic = if (!detect_unknown) "not_assessed" else
+          switch(unknown_threshold_method,
+                 mad = "top_margin",
+                 knn = "nearest_training_distance",
+                 global_mahalanobis = "global_mahalanobis",
+                 pca_residual = "pca_reconstruction_residual",
+                 "nearest_class_distance"),
         known_values = unknown_statistic[reference],
         simulated_unknown_values = stranger_statistic,
         metrics = unknown_metrics

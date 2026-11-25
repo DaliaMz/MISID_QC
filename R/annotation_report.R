@@ -371,7 +371,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
   } else if (!isTRUE(unknown$enabled)) {
     unknown_plot <- empty("5. Unknown detection", "Unknown detection was disabled")
   } else {
-    direction <- if (identical(unknown$statistic, "nearest_class_distance")) "upper" else "lower"
+    direction <- if (identical(unknown$statistic, "top_margin")) "lower" else "upper"
     unknown_caption <- paste0(
       "Cutoff ", num(unknown$threshold), "; statistic: ", unknown$statistic,
       "; ", if (direction == "upper") "larger" else "smaller", " values are flagged.\n",
@@ -412,9 +412,12 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     empty("Final unknown scores", "Unknown detection was disabled")
   } else histogram(final$unknown_detection_score, unknown$threshold,
                    "Final unknown scores", paste("Unavailable scores:", sum(!is.finite(p$unknown_detection_score))),
-                   if (identical(unknown$statistic, "nearest_class_distance")) {
-                     "Nearest-class distance"
-                   } else "Top margin")
+                   switch(unknown$statistic,
+                          top_margin = "Top margin",
+                          nearest_training_distance = "Nearest-training distance",
+                          global_mahalanobis = "Global Mahalanobis distance",
+                          pca_reconstruction_residual = "PCA reconstruction residual",
+                          "Nearest-class distance"))
   draw_page(list(real_holdout, real_detection, real_recovery, real_unknown), 2, 2)
   invisible(file)
 }

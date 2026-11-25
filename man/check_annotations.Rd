@@ -8,10 +8,12 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   min_agreement = 0.6, margin_coverage = 0.025,
   holdout_reference = c("all_alternatives", "top"),
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
-  unknown_threshold_method = c("simulated", "mad"),
+  unknown_threshold_method = c("simulated", "mad", "knn",
+                               "global_mahalanobis", "pca_residual"),
   unknown_mad = 3,
   grouped_unknown_validation = FALSE,
   unknown_stray_samples = 2L, mismatch_repeats = 3L,
+  covariate_col = NULL, covariate_method = c("residualize"),
   diagnostics = FALSE)
 }
 \arguments{
@@ -58,6 +60,13 @@ with a cutoff tuned on the other repeats' swapped and unchanged samples and the
 reference negatives. More repeats give a less extreme cutoff and a steadier
 sensitivity estimate at the cost of roughly proportional simulation time. With 1,
 sensitivity is in-sample.}
+\item{covariate_col}{Optional metadata column name, or character vector of
+names, used to residualize expression before individual modelling. Categorical
+covariates are fitted as fixed effects and numeric covariates as linear effects.
+Covariates are removed without using individual identities or mislabel/unknown
+truth, and missing covariate values are rejected.}
+\item{covariate_method}{Fixed-effect covariate modelling method. Currently only
+\code{"residualize"} is supported.}
 \item{diagnostics}{Whether to include intermediate gate data in the result.
 This is intended for understanding and plotting the validation steps; it can
 add substantially to the result size.}
@@ -72,17 +81,15 @@ off: no stranger validation is run, no sample is marked as a potential
 unknown individual.
 \code{feasibility$unknown_individual_detection} is \code{"not_assessed"}.}
 
-\item{unknown_threshold_method}{How the unknown-individual cutoff on the top
-statistic is chosen. \code{"simulated"} (default) uses the Mahalanobis
-distance (under the shrinkage covariance) from a sample to its nearest
-enrolled individual's mean, with the cutoff chosen so at most
-\code{1 - target_specificity} of enrolled reference samples exceed it while
-catching the most simulated strangers; with no simulated strangers it is the
-\code{target_specificity} quantile of the enrolled distances. \code{"mad"}
-restores the earlier rule, a cutoff on the top-versus-second margin of
-\code{median - unknown_mad * MAD} of the log top margin of enrolled samples,
-which uses no simulated strangers. Samples beyond the cutoff are marked as
-potential unknown individuals and cannot receive candidate corrections; the
+\item{unknown_threshold_method}{How the unknown-individual cutoff is chosen.
+\code{"simulated"} (default) uses the nearest-class Mahalanobis distance.
+\code{"mad"} restores the robust top-margin rule. \code{"knn"} uses distance to
+nearby in-class training residuals, \code{"global_mahalanobis"} uses distance
+from the pooled cohort center, and \code{"pca_residual"} uses reconstruction
+residual outside leading pooled within-class principal components.
+Non-MAD methods use target-specificity quantiles and simulated stranger scores
+to select an upper cutoff. Samples beyond the cutoff are marked as potential
+unknown individuals and cannot receive candidate corrections; the
 flag does not hide \code{predicted_id_clean}. No share
 of samples is forced to be unknown.}
 \item{unknown_mad}{Multiplier used only when
@@ -100,7 +107,8 @@ reported unknown sensitivity and feasibility. With the default \code{unknown_thr
 }
 \value{
 A list with sample-level \code{predictions}, raw \code{identity_scores},
-\code{performance}, \code{calibration}, \code{risk_coverage},
+\code{performance}, \code{calibration}, \code{covariate_adjustment},
+\code{risk_coverage},
 \code{mismatch_simulation}, \code{unknown_simulation},
 \code{unknown_simulation_scores}, \code{held_out} (count, fraction and IDs of samples held
 out as confidently misassigned, from the first pass), \code{feasibility}, and

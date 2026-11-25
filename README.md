@@ -201,6 +201,18 @@ The simulation seed is used by default; `seed=...` can
 override it. The RDS includes the full result, diagnostic tables, scenario
 truth and parameters.
 
-This version does not normalize raw counts, select features, or account for
-tissue/batch covariates. Supply appropriately transformed expression values
-and consider tissue-related expression variation in the interpretation.
+This version does not normalize raw counts or select features. Supply
+appropriately transformed expression values. For known tissue or batch
+covariates, pass metadata column names with `covariate_col`:
+
+```r
+check_annotations(
+  expr, metadata, "sample", "individual",
+  covariate_col = "tissue"
+)
+```
+
+`covariate_col` may be a character vector for multiple covariates. Categorical
+covariates are fitted as fixed effects and numeric covariates as linear effects;
+expression is residualized before individual, mislabel, and unknown validation.
+Covariates are not modelled using individual identities or unknown-truth labels.

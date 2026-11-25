@@ -22,7 +22,7 @@
 #   subset     data.table expression on the scenario parameters, e.g. "rep == 1"
 #   scenarios  R expression for scenario numbers, e.g. 1:20
 #   cv_folds, mismatch_repeats, mismatch_rate, target_specificity, margin_coverage,
-#   holdout_reference
+#   holdout_reference, unknown_threshold_method
 #              comma-separated values to compare; every combination is run, e.g.
 #              cv_folds=5,loo mismatch_repeats=1,3 target_specificity=0.9,0.95,0.99
 #              margin_coverage=0.01,0.025,0.05
@@ -30,6 +30,10 @@
 #              holdout_reference=all_alternatives,top
 #              ("loo" = leave-one-out). Defaults: 5, 3, 0.95, 0.025
 #   detect_unknown TRUE/FALSE; comma-separated values to compare (default FALSE)
+#   unknown_threshold_method simulated,mad,knn,global_mahalanobis,pca_residual
+#              (default simulated)
+#   covariate_col comma-separated metadata columns to residualize
+#              (default none; synthetic data expose batch,time)
 #   force      TRUE to recompute scenarios that already have a row file
 #   min_agreement  agreement gate passed to check_annotations() (default 0 =
 #              off; first_pass_agreement is recorded to apply cutoffs later)
@@ -57,6 +61,8 @@ opt <- list(input = "simulations/results/simulated_datasets_v2.rds",
             margin_coverage = "0.025", mismatch_rate = "0.1",
             holdout_reference = "all_alternatives",
             detect_unknown = "FALSE",
+            unknown_threshold_method = "simulated",
+            covariate_col = "",
             min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
@@ -80,6 +86,14 @@ if (!length(mismatch_rates) || any(!nzchar(mismatch_rates)) ||
 }
 mismatch_rates[mismatch_rates != "held_out"] <-
   as.character(numeric_rates[mismatch_rates != "held_out"])
+unknown_methods <- as_vals(opt$unknown_threshold_method)
+allowed_unknown_methods <- c("simulated", "mad", "knn",
+                             "global_mahalanobis", "pca_residual")
+if (!length(unknown_methods) || any(!nzchar(unknown_methods)) ||
+    any(!unknown_methods %in% allowed_unknown_methods)) {
+  stop("unknown_threshold_method must contain one or more of: ",
+       paste(allowed_unknown_methods, collapse = ", "))
+}
 configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               mismatch_repeats = as.integer(as_vals(opt$mismatch_repeats)),
               mismatch_rate = unique(mismatch_rates),
@@ -87,15 +101,22 @@ configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               margin_coverage = as.numeric(as_vals(opt$margin_coverage)),
               holdout_reference = as_vals(opt$holdout_reference),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
+              unknown_threshold_method = unknown_methods,
               sorted = FALSE)
 # The suffix distinguishes dual calibration and verdicts from historical runs.
-configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s_dualcal_simspec_corrcal_nogeneral_verdict10", cv_folds, mismatch_repeats,
+configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s%s_dualcal_simspec_corrcal_nogeneral_verdict10", cv_folds, mismatch_repeats,
                          target_specificity,
                          ifelse(mismatch_rate == "0.1", "", paste0("_swap", mismatch_rate)),
                          ifelse(margin_coverage == 0.025, "", paste0("_mc", margin_coverage)),
                          ifelse(holdout_reference == "all_alternatives", "",
                                 paste0("_hr", holdout_reference)),
-                    ifelse(detect_unknown, "_du", ""))]
+                    ifelse(detect_unknown, "_du", ""),
+                    ifelse(unknown_threshold_method == "simulated", "",
+                           paste0("_um", unknown_threshold_method)))])
+if (nzchar(opt$covariate_col)) {
+  covariate_suffix <- gsub("[^A-Za-z0-9]+", "-", opt$covariate_col)
+  configs[, cfg := paste0(cfg, "_cov", covariate_suffix)]
+}
 dirty_dir <- file.path(opt$out, "dirty")
 rows_dir <- file.path(opt$out, "rows")
 for (d in c(dirty_dir, rows_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
@@ -229,8 +250,15 @@ run_config <- function(sim, id, cfg, meta, X, md) {
   t0 <- Sys.time()
   rate <- if (cfg$mismatch_rate == "held_out") "held_out" else
     as.numeric(cfg$mismatch_rate)
+  covariate_col <- if (nzchar(opt$covariate_col)) {
+    as_vals(opt$covariate_col)
+  } else {
+    NULL
+  }
   check_args <- list(detect_unknown = cfg$detect_unknown, mismatch_rate = rate,
-                     min_agreement = as.numeric(opt$min_agreement))
+                     min_agreement = as.numeric(opt$min_agreement),
+                     unknown_threshold_method = cfg$unknown_threshold_method,
+                     covariate_col = covariate_col)
   args <- c(list(expr = X, metadata = md, sample_col = "sample", id_col = "label",
                  cv_folds = folds, progress = FALSE,
                  mismatch_repeats = cfg$mismatch_repeats,
@@ -266,7 +294,8 @@ run_scenario <- function(sim, id, g) {
   meta <- as.data.frame(sim$meta)
   meta$label_true <- as.character(meta$label_true)
   X <- t(sim$X)   # the simulator returns samples x features
-  md <- data.frame(sample = meta$sample, label = as.character(meta$label_observed))
+  md <- data.frame(sample = meta$sample, label = as.character(meta$label_observed),
+                   batch = meta$batch, time = meta$time)
   for (k in todo) {
     cfg <- configs[cfg == k]
     res <- tryCatch(run_config(sim, id, cfg, meta, X, md),

@@ -148,3 +148,74 @@ predict_shrinkage_lda <- function(object, newdata, ...) {
   best <- apply(sweep(scores, 2L, log(model$priors), FUN = "-"), 1L, max)
   sqrt(pmax(quadratic - 2 * best, 0))
 }
+
+# Pooled Mahalanobis distance to the cohort center. Unlike
+# `.nearest_class_distance()`, this statistic does not reward fitting an
+# unknown sample to the nearest enrolled class.
+.global_mahalanobis_distance <- function(model, newdata) {
+  x <- as.matrix(newdata)
+  if (!is.null(model$feature_names) && !is.null(colnames(x))) {
+    x <- x[, model$feature_names, drop = FALSE]
+  }
+  center <- colSums(sweep(model$means, 1L, model$priors, FUN = "*"))
+  residual <- sweep(x, 2L, center, FUN = "-")
+  scaled <- sweep(residual, 2L, model$covariance_diagonal, FUN = "/")
+  quadratic <- rowSums(scaled * residual)
+  if (!is.null(model$middle)) {
+    projected <- model$residuals %*% t(scaled)
+    quadratic <- quadratic - colSums(projected * (model$middle %*% projected))
+  }
+  sqrt(pmax(quadratic, 0))
+}
+
+# Reconstruction residual after projecting pooled within-class variation onto
+# its leading principal components. Large residuals represent variation outside
+# the enrolled covariance subspace.
+.pca_reconstruction_residual <- function(model, newdata, n_components = 10L) {
+  x <- as.matrix(newdata)
+  if (!is.null(model$feature_names) && !is.null(colnames(x))) {
+    x <- x[, model$feature_names, drop = FALSE]
+  }
+  center <- colSums(sweep(model$means, 1L, model$priors, FUN = "*"))
+  scale <- sqrt(model$covariance_diagonal)
+  training <- sweep(model$residuals, 2L, scale, FUN = "/")
+  decomposition <- svd(training, nu = 0L,
+                       nv = min(as.integer(n_components),
+                                nrow(training), ncol(training)))
+  k <- ncol(decomposition$v)
+  if (!k) return(rep(0, nrow(x)))
+  standardized <- sweep(sweep(x, 2L, center, FUN = "-"), 2L, scale,
+                        FUN = "/")
+  coefficients <- standardized %*% decomposition$v
+  residual <- standardized - coefficients %*% t(decomposition$v)
+  sqrt(rowMeans(residual * residual))
+}
+
+# Mean distance to the k nearest training residuals after nearest-class
+# centering and diagonal shrinkage-covariance standardization.
+.nearest_training_distance <- function(model, newdata, k = 5L) {
+  x <- as.matrix(newdata)
+  if (!is.null(model$feature_names) && !is.null(colnames(x))) {
+    x <- x[, model$feature_names, drop = FALSE]
+  }
+  scale <- sqrt(model$covariance_diagonal)
+  class_distance <- do.call(cbind, lapply(seq_len(nrow(model$means)), function(i) {
+    residual <- sweep(x, 2L, model$means[i, ], FUN = "-")
+    rowSums((residual / scale) * (residual / scale))
+  }))
+  nearest <- max.col(-class_distance, ties.method = "first")
+  nearest_means <- t(vapply(seq_len(nrow(x)), function(i) {
+    model$means[nearest[i], ]
+  }, numeric(ncol(model$means))))
+  test_residual <- x - nearest_means
+  test_residual <- sweep(test_residual, 2L, scale, FUN = "/")
+  training_residual <- sweep(model$residuals, 2L, scale, FUN = "/")
+  squared <- rowSums(test_residual * test_residual)
+  squared <- sweep(-2 * (test_residual %*% t(training_residual)),
+                   1L, squared, FUN = "+")
+  squared <- sweep(squared, 2L, rowSums(training_residual * training_residual),
+                   FUN = "+")
+  squared <- pmax(squared, 0)
+  k <- min(as.integer(k), nrow(training_residual))
+  sqrt(apply(squared, 1L, function(row) mean(sort(row)[seq_len(k)])))
+}

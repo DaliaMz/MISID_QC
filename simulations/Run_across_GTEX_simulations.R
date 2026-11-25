@@ -32,6 +32,8 @@
 #                     sample reference margins above which a disagreeing
 #                     sample is held out; lower values hold out more samples.
 #   detect_unknown     TRUE/FALSE; comma-separated values to compare (default FALSE)
+#   covariate_col      comma-separated metadata columns to residualize
+#                      (default none; GTEx metadata exposes tissue and SMTS)
 #   force             TRUE to recompute scenarios that are already done
 #                     (needed after a package or settings change: finished
 #                     configs are skipped even if they used other settings)
@@ -60,6 +62,7 @@ opt <- list(scenarios_file = "simulations/results/gtex_scenarios.rds",
             margin_coverage = "0.025", mismatch_rate = "0.1",
             holdout_reference = "all_alternatives",
             detect_unknown = "FALSE",
+            covariate_col = "",
             min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]
@@ -98,6 +101,10 @@ configs[, cfg := sprintf("cv%s_mr%d_mc%s_ts%s%s%s%s_dualcal_simspec_corrcal_noge
                          ifelse(holdout_reference == "all_alternatives", "",
                                 paste0("_hr", holdout_reference)),
                             ifelse(detect_unknown, "_du", ""))]
+if (nzchar(opt$covariate_col)) {
+  covariate_suffix <- gsub("[^A-Za-z0-9]+", "-", opt$covariate_col)
+  configs[, cfg := paste0(cfg, "_cov", covariate_suffix)]
+}
 task_id <- as.integer(opt$task_id); n_tasks <- as.integer(opt$n_tasks)
 stopifnot(task_id >= 1L, task_id <= n_tasks)
 dirty_dir <- file.path(opt$out, "dirty_gtex")
@@ -239,8 +246,14 @@ run_config <- function(sim, id, cfg, meta, X, md) {
   t0 <- Sys.time()
   rate <- if (cfg$mismatch_rate == "held_out") "held_out" else
     as.numeric(cfg$mismatch_rate)
+  covariate_col <- if (nzchar(opt$covariate_col)) {
+    as_vals(opt$covariate_col)
+  } else {
+    NULL
+  }
   check_args <- list(detect_unknown = cfg$detect_unknown, mismatch_rate = rate,
-                     min_agreement = as.numeric(opt$min_agreement))
+                     min_agreement = as.numeric(opt$min_agreement),
+                     covariate_col = covariate_col)
   args <- c(list(expr = X, metadata = md, sample_col = "sample", id_col = "label",
                  cv_folds = folds, progress = FALSE,
                  mismatch_repeats = cfg$mismatch_repeats,
@@ -275,7 +288,8 @@ run_scenario <- function(sim, id, expr) {
   meta <- as.data.frame(sim$meta)
   meta$label_true <- as.character(meta$label_true)
   X <- slice_expression(expr, meta$sample, as.integer(opt$n_features))
-  md <- data.frame(sample = meta$sample, label = as.character(meta$label_observed))
+  md <- data.frame(sample = meta$sample, label = as.character(meta$label_observed),
+                   tissue = meta$SMTSD, SMTS = meta$SMTS)
   for (k in todo) {
     cfg <- configs[cfg == k]
     res <- tryCatch(run_config(sim, id, cfg, meta, X, md),

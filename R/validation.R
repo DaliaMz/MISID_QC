@@ -119,6 +119,39 @@
   if (denominator == 0) NA_real_ else numerator / denominator
 }
 
+# Residualize sample-by-feature expression against fixed-effect covariates.
+# Covariates are removed without using individual identities, swaps, or
+# unknown-sample labels. Character, logical, and factor columns become fixed
+# categorical effects; numeric columns remain linear effects.
+.covariate_residualize <- function(x, covariates) {
+  covariates <- as.data.frame(covariates)
+  if (!ncol(covariates) || nrow(covariates) != nrow(x)) {
+    stop("Covariates must provide one row per sample.")
+  }
+  covariate_frame <- covariates
+  for (j in seq_len(ncol(covariates))) {
+    value <- covariates[[j]]
+    if (is.numeric(value)) {
+      if (any(!is.finite(value))) {
+        stop("Numeric covariates must contain only finite values.")
+      }
+      covariate_frame[[j]] <- as.numeric(value)
+    } else {
+      if (anyNA(value) || any(!nzchar(as.character(value)))) {
+        stop("Covariates must contain no missing or empty values.")
+      }
+      covariate_frame[[j]] <- factor(as.character(value))
+    }
+  }
+  design <- stats::model.matrix(~ ., data = covariate_frame)
+  fit <- stats::lm.fit(design, as.matrix(x))
+  residual <- fit$residuals
+  residual <- as.matrix(residual)
+  dimnames(residual) <- dimnames(x)
+  storage.mode(residual) <- "double"
+  residual
+}
+
 .detection_verdict <- function(sensitivity, specificity, target_specificity,
                                enough_known, swap_simulation) {
   if (!enough_known || !swap_simulation ||
@@ -347,6 +380,8 @@
       message("Skipping held-out-individual validation: at least three individuals are needed.")
     }
     return(list(n = 0L, top_margin = numeric(), distance = numeric(),
+                global_mahalanobis = numeric(), pca_residual = numeric(),
+                knn = numeric(),
                 status = "insufficient_evidence"))
   }
   n_groups <- if (is.null(n_folds)) {
@@ -366,6 +401,9 @@
   }
   unknown_margin <- numeric()
   unknown_distance <- numeric()
+  unknown_global_mahalanobis <- numeric()
+  unknown_pca_residual <- numeric()
+  unknown_knn <- numeric()
   records <- list()
   score_rows <- list()
   progress_interval <- max(1L, ceiling(n_groups / 10L))
@@ -395,10 +433,24 @@
         scores <- predict_shrinkage_lda(model, x[scored, , drop = FALSE])
         margins <- .score_margins(scores, wrong[half == h])
         distances <- .nearest_class_distance(model, x[scored, , drop = FALSE])
+        global_mahalanobis <- .global_mahalanobis_distance(
+          model, x[scored, , drop = FALSE]
+        )
+        pca_residual <- .pca_reconstruction_residual(
+          model, x[scored, , drop = FALSE]
+        )
+        knn_distance <- .nearest_training_distance(
+          model, x[scored, , drop = FALSE]
+        )
         unknown_margin <- c(
           unknown_margin, margins$top_margin
         )
         unknown_distance <- c(unknown_distance, distances)
+        unknown_global_mahalanobis <- c(
+          unknown_global_mahalanobis, global_mahalanobis
+        )
+        unknown_pca_residual <- c(unknown_pca_residual, pca_residual)
+        unknown_knn <- c(unknown_knn, knn_distance)
         records[[length(records) + 1L]] <- data.frame(
           sample_id = rownames(x)[scored],
           original_id = y[scored],
@@ -409,6 +461,9 @@
           annotation_margin = margins$annotation_margin,
           top_margin = margins$top_margin,
           nearest_class_distance = distances,
+          global_mahalanobis = global_mahalanobis,
+          pca_reconstruction_residual = pca_residual,
+          nearest_training_distance = knn_distance,
           holdout_group = g,
           scoring_fold = h,
           stringsAsFactors = FALSE
@@ -429,6 +484,9 @@
   }
   list(n = length(unknown_margin), top_margin = unknown_margin,
        distance = unknown_distance,
+       global_mahalanobis = unknown_global_mahalanobis,
+       pca_residual = unknown_pca_residual,
+       knn = unknown_knn,
        records = if (length(records)) do.call(rbind, records) else NULL,
        identity_scores = if (length(score_rows)) do.call(rbind, score_rows) else NULL,
        status = if (length(unknown_margin)) "estimated" else
