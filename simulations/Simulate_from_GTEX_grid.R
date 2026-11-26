@@ -12,6 +12,10 @@
 #                dissimilar  k tissues spread out (farthest-first)
 #              "similar" should make donor discrimination easier because
 #              tissue variance is smaller.
+#   matching   `"random"` keeps the existing sampling. `"paired"` uses the
+#              same tissue set across enrolled individuals for individual
+#              detection and the same donor set across tissues for tissue
+#              detection, as complete as the source data permits.
 #
 # The grid now uses only "random" sets (set `keep_sets` before sourcing to
 # change this); the other sets stay in the scenario numbering so scenario
@@ -111,13 +115,29 @@ introduce_misid <- function(label, rate, min_count = 2L, max_tries = 200L) {
   NULL
 }
 
-make_tissue_scenario <- function(n_labels, n_per_label, set) {
+make_tissue_scenario <- function(n_labels, n_per_label, set,
+                                 matching = c("random", "paired")) {
+  matching <- match.arg(matching)
   # Labels need enough distinct donors to sample from.
   donors <- meta_all[, .(n = uniqueN(ID)), by = SMTS][n >= 2 * n_per_label, SMTS]
   labs <- pick_labels(sim_smts, donors, n_labels, set)
+  if (matching == "random") {
+    return(rbindlist(lapply(labs, function(l) {
+      d <- meta_all[SMTS == l][sample(.N)]
+      d <- d[!duplicated(ID)][seq_len(n_per_label)]  # one sample per donor
+      d[, label_true := l]
+    })))
+  }
+  common <- Reduce(intersect,
+                   lapply(labs, function(l) unique(meta_all[SMTS == l, ID])))
+  common_count <- min(n_per_label, length(common))
+  if (common_count < 2L) return(NULL)
+  common <- sample(common, common_count)
   rbindlist(lapply(labs, function(l) {
-    d <- meta_all[SMTS == l][sample(.N)]
-    d <- d[!duplicated(ID)][seq_len(n_per_label)]  # one sample per donor
+    d <- meta_all[SMTS == l & ID %in% common][sample(.N)]
+    d <- d[!duplicated(ID)]
+    d <- d[match(common, d$ID)]
+    d <- d[!is.na(d$sample)]
     d[, label_true := l]
   }))
 }
@@ -125,12 +145,47 @@ make_tissue_scenario <- function(n_labels, n_per_label, set) {
 # n_per_label = Inf means "as many as possible": all samples of the donors
 # covered by the most tissues in the set. A donor has at most about one sample
 # per tissue, so n_tissues grows with n_per_label (at least 8).
-make_individual_scenario <- function(n_labels, n_per_label, set, n_tissues = NULL) {
+make_individual_scenario <- function(n_labels, n_per_label, set, n_tissues = NULL,
+                                     matching = c("random", "paired")) {
+  matching <- match.arg(matching)
   pool <- meta_all[, .N, by = SMTSD][N >= min_tissue_samples, SMTSD]
   if (is.null(n_tissues)) {
-    n_tissues <- if (is.finite(n_per_label)) max(8L, as.integer(n_per_label)) else 20L
+    n_tissues <- if (matching == "paired" && is.finite(n_per_label)) {
+      as.integer(n_per_label)
+    } else if (is.finite(n_per_label)) {
+      max(8L, as.integer(n_per_label))
+    } else {
+      20L
+    }
   }
   tis <- pick_labels(sim_smtsd, pool, n_tissues, set)
+  if (matching == "paired") {
+    candidates <- meta_all[SMTSD %in% tis]
+    while (length(tis) > 1L) {
+      coverage <- candidates[, .(n_tissues = uniqueN(SMTSD)), by = ID]
+      elig <- coverage[n_tissues == length(tis), ID]
+      if (length(elig) >= n_labels) break
+      tissue_counts <- candidates[, .(n_donors = uniqueN(ID)), by = SMTSD]
+      remove <- tissue_counts[order(n_donors, SMTSD)][1, SMTSD]
+      tis <- setdiff(tis, remove)
+      candidates <- candidates[SMTSD %in% tis]
+    }
+    coverage <- candidates[, .(n_tissues = uniqueN(SMTSD)), by = ID]
+    elig <- coverage[n_tissues == length(tis), ID]
+    if (length(elig) < 5L) return(NULL)
+    keep <- sample(elig, min(n_labels, length(elig)))
+    d <- rbindlist(lapply(keep, function(id) {
+      rbindlist(lapply(tis, function(tissue) {
+        x <- candidates[ID == id & SMTSD == tissue][sample(.N)]
+        if (!nrow(x)) return(NULL)
+        x <- x[1]
+        x
+      }))
+    }))
+    d[, label_true := ID]
+    d[, tissues := paste(tis, collapse = "|")]
+    return(d)
+  }
   d <- meta_all[SMTSD %in% tis]
   counts <- d[, .N, by = ID]
   elig <- if (is.finite(n_per_label)) counts[N >= n_per_label, ID] else
@@ -147,6 +202,11 @@ make_individual_scenario <- function(n_labels, n_per_label, set, n_tissues = NUL
 
 build_scenario <- function(g) {
   set.seed(g$seed)
+  matching <- if ("matching" %in% names(g)) as.character(g$matching) else "random"
+  if (length(matching) != 1L || is.na(matching) ||
+      !matching %in% c("random", "paired")) {
+    stop("matching must be \"random\" or \"paired\".")
+  }
   n_unknown <- if (g$task == "tissue") {
     if ("n_unknown_tissues" %in% names(g)) g$n_unknown_tissues else
       n_unknown_tissues
@@ -155,9 +215,10 @@ build_scenario <- function(g) {
       n_unknown_individuals
   }
   d <- if (g$task == "tissue") {
-    make_tissue_scenario(g$n_labels, g$n_per_label, g$set)
+    make_tissue_scenario(g$n_labels, g$n_per_label, g$set, matching)
   } else {
-    make_individual_scenario(g$n_labels, g$n_per_label, g$set)
+    make_individual_scenario(g$n_labels, g$n_per_label, g$set,
+                             matching = matching)
   }
   if (is.null(d) || uniqueN(d$label_true) < 3L) return(NULL)
   mi <- introduce_misid(d$label_true, g$misid_rate)
@@ -185,15 +246,35 @@ build_scenario <- function(g) {
         sample.int(length(enrolled_labels), .N, replace = TRUE)]]
     } else {
       enrolled_ids <- unique(d$ID)
-      pool <- meta_all[SMTSD %in% unique(d$SMTSD) & !ID %in% enrolled_ids]
-      eligible <- pool[, .N, by = ID][N >= unknown_samples_per_individual, ID]
+      tissues <- unique(d$SMTSD)
+      if (matching == "paired" && length(tissues) > unknown_samples_per_individual) {
+        tissues <- sample(tissues, unknown_samples_per_individual)
+      }
+      pool <- meta_all[SMTSD %in% tissues & !ID %in% enrolled_ids]
+      if (matching == "paired") {
+        coverage <- pool[, .(n_tissues = uniqueN(SMTSD)), by = ID]
+        eligible <- coverage[n_tissues == length(tissues), ID]
+      } else {
+        eligible <- pool[, .N, by = ID][
+          N >= unknown_samples_per_individual, ID]
+      }
       if (length(eligible) < n_unknown) {
         stop("Scenario ", g$scenario, ": not enough eligible unknown donors (need ",
              n_unknown, ", found ", length(eligible), ").")
       }
       chosen <- eligible[sample.int(length(eligible), n_unknown)]
-      strangers <- pool[ID %in% chosen][
-        , .SD[sample.int(.N, unknown_samples_per_individual)], by = ID]
+      strangers <- if (matching == "paired") {
+        rbindlist(lapply(chosen, function(id) {
+          rbindlist(lapply(tissues, function(tissue) {
+            x <- pool[ID == id & SMTSD == tissue][sample(.N)]
+            if (!nrow(x)) return(NULL)
+            x[1]
+          }))
+        }))
+      } else {
+        pool[ID %in% chosen][
+          , .SD[sample.int(.N, unknown_samples_per_individual)], by = ID]
+      }
       strangers[, `:=`(
         label_true = ID,
         label_observed = enrolled_labels[
@@ -226,6 +307,13 @@ if (!exists("keep_sets")) keep_sets <- "random"
 # levels for the individual task. Set these before sourcing to change them.
 if (!exists("keep_rates")) keep_rates <- c(0, 0.05, 0.1, 0.2, 0.4)
 if (!exists("keep_individual_n")) keep_individual_n <- c(4, 10, Inf)
+if (!exists("matching_modes")) matching_modes <- "random"
+if (!is.character(matching_modes) || !length(matching_modes) ||
+    anyNA(matching_modes) ||
+    any(!matching_modes %in% c("random", "paired"))) {
+  stop("matching_modes must contain only \"random\" or \"paired\".")
+}
+matching_modes <- unique(matching_modes)
 grid <- rbind(
   CJ(task = "tissue",
      set = c("random", "similar"),
@@ -251,6 +339,20 @@ grid[, scenario := .I]
 grid[, seed := 5000L + scenario]
 grid <- grid[set %in% keep_sets & misid_rate %in% keep_rates &
                (task == "tissue" | n_per_label %in% keep_individual_n)]
+base_scenarios <- rep(grid$scenario, each = length(matching_modes))
+grid <- grid[rep(seq_len(.N), each = length(matching_modes))]
+grid[, `:=`(
+  base_scenario = base_scenarios,
+  matching = rep(matching_modes, times = nrow(grid) / length(matching_modes))
+)]
+if (length(matching_modes) > 1L) {
+  paired_offset <- max(base_scenarios)
+  grid[matching == "paired", scenario := base_scenario + paired_offset]
+  grid[, seed := 5000L + scenario]
+} else {
+  grid[, scenario := base_scenario]
+  grid[, seed := 5000L + scenario]
+}
 
 expand_unknown_grid <- function(task_grid, task, count, scenario_offset) {
   levels <- if (count == 0L) 0L else c(0L, as.integer(count))

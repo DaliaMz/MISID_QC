@@ -90,6 +90,15 @@ and `pca_residual` measures reconstruction residual outside leading pooled
 within-class principal components. Method choices are included in synthetic
 config names only when detection is enabled.
 
+`Simulate_full_dataset.R` also exposes categorical tissue and numeric time
+covariates. Default runs create `tissue` metadata with no tissue variance; set
+`covariate_nuisance_levels=c("none","categorical","numeric","both")` before
+sourcing to add covariate-specific grid scenarios. The modes respectively
+disable or enable tissue variance and the existing numeric `time` trend.
+`n_tissues` controls the number of categorical levels (default 4). Scenario
+parameters retain `n_tissues`, `var_tissue`, `var_numeric_covariate`, and
+`covariate_nuisance`, and `simulate_grid()` passes them to each dataset.
+
 The package and both runners can residualize fixed-effect covariates before
 modelling. Pass `covariate_col=tissue` to a runner for one metadata column, or
 a comma-separated list for multiple columns. The synthetic runner exposes
@@ -200,6 +209,13 @@ or 20 samples each) and individual (20 or 40 individuals; 4, 10 or all
 samples) tasks with random tissue sets only, at mislabel rates 0, 0.05, 0.1,
 0.2 and 0.4, with 3 repetitions. Each base setting has an unknown-class and a
 no-unknown version, for up to 300 scenarios. The numbering and seeds come from the original
+Set `matching_modes="paired"` before sourcing to generate tissue-matched
+individual scenarios or individual-matched tissue scenarios. In paired
+individual scenarios, each selected donor receives one sample from the same
+tissue set as every other donor, as complete as the source permits. In paired
+tissue scenarios, each tissue label uses the same set of donors. Set
+`matching_modes=c("random","paired")` to benchmark both designs; the default
+remains `"random"` and preserves existing scenario numbering. The numbering and seeds come from the original
 grid, so scenarios shared with earlier runs keep their numbers and seeds. Set
 `keep_sets`, `keep_rates` or `keep_individual_n` before sourcing to change the
 subset. The runners default to 5-fold CV and

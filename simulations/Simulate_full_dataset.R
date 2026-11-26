@@ -1,18 +1,43 @@
-# Simulate repeated-sample data with label-driven and competing variance, plus mis-identified labels.
-# Grid: data type x label variance share x discrete and continuous variance shares x samples/label.
+# Simulate repeated-sample data with label-driven and competing variance,
+# explicit tissue and time covariates, and mis-identified labels.
+# Grid: data type x label variance share x nuisance/covariate shares x samples/label.
 library(data.table)
 
 # ---- Simulation -------------------------------------------------------------
 
-# Latent log-scale = label + batch + residual; variance shares sum to 1 (times sigma2_total).
+# Latent log-scale = label + batch + tissue + numeric time + residual;
+# variance shares sum to at most 1 (times sigma2_total).
 simulate_latent <- function(n_labels, n_per_label, n_features,
                             var_label, var_discrete, var_cont,
-                            n_batches = 4, sigma2_total = 1, shared_time = FALSE) {
-  stopifnot(var_label + var_discrete + var_cont <= 1)
+                            n_batches = 4, sigma2_total = 1, shared_time = FALSE,
+                            n_tissues = 4L, var_tissue = 0,
+                            var_numeric_covariate = 0) {
+  if (!is.numeric(n_tissues) || length(n_tissues) != 1L ||
+      !is.finite(n_tissues) || n_tissues < 1L ||
+      n_tissues != floor(n_tissues)) {
+    stop("n_tissues must be a positive integer.")
+  }
+  n_tissues <- as.integer(n_tissues)
+  for (name in c("var_label", "var_discrete", "var_cont",
+                 "var_tissue", "var_numeric_covariate")) {
+    value <- get(name)
+    if (!is.numeric(value) || length(value) != 1L ||
+        !is.finite(value) || value < 0) {
+      stop(name, " must be a non-negative finite number.")
+    }
+  }
+  if (n_tissues == 1L && var_tissue > 0) {
+    stop("var_tissue must be zero when n_tissues is 1.")
+  }
+  if (var_label + var_discrete + var_cont + var_tissue +
+      var_numeric_covariate > 1) {
+    stop("Variance shares sum to more than 1.")
+  }
   n     <- n_labels * n_per_label
   label <- rep(seq_len(n_labels), each = n_per_label)
   # Discrete batch and continuous time are assigned independently of label
   batch <- sample.int(n_batches, n, replace = TRUE)
+  tissue <- sample.int(n_tissues, n, replace = TRUE)
   # shared_time = TRUE: every label has the same evenly spaced time points (sample j of each label at the j-th point)
   time  <- if (shared_time) rep(seq(0, 1, length.out = n_per_label), times = n_labels) else runif(n)
 
@@ -34,9 +59,11 @@ simulate_latent <- function(n_labels, n_per_label, n_features,
 
   z <- sd_mat(n_labels, var_label)[label, , drop = FALSE] +
     sd_mat(n_batches, var_discrete)[batch, , drop = FALSE] +
-    time_effect(var_cont) +
-    sd_mat(n, max(0, 1 - var_label - var_discrete - var_cont))
-  list(z = z, label = label, batch = batch, time = time)
+    sd_mat(n_tissues, var_tissue)[tissue, , drop = FALSE] +
+    time_effect(var_cont + var_numeric_covariate) +
+    sd_mat(n, max(0, 1 - var_label - var_discrete - var_cont -
+                   var_tissue - var_numeric_covariate))
+  list(z = z, label = label, batch = batch, time = time, tissue = tissue)
 }
 
 # Map latent values to the observed (log-scale) data type.
@@ -82,7 +109,9 @@ simulate_dataset <- function(type, var_label, var_discrete, var_cont, n_per_labe
                              n_labels = 25, n_features = 300, misid_rate = 0.1,
                              n_batches = 4, shared_time = TRUE,
                              n_unknown_individuals = 1L,
-                             unknown_samples_per_individual = 2L) {
+                             unknown_samples_per_individual = 2L,
+                             n_tissues = 4L, var_tissue = 0,
+                             var_numeric_covariate = 0) {
   if (length(n_unknown_individuals) != 1L || !is.numeric(n_unknown_individuals) ||
       !is.finite(n_unknown_individuals) || n_unknown_individuals < 0 ||
       n_unknown_individuals != floor(n_unknown_individuals) ||
@@ -96,7 +125,9 @@ simulate_dataset <- function(type, var_label, var_discrete, var_cont, n_per_labe
   }
   sim <- simulate_latent(n_labels + n_unknown_individuals, n_per_label, n_features,
                          var_label, var_discrete, var_cont, n_batches,
-                         shared_time = shared_time)
+                         shared_time = shared_time, n_tissues = n_tissues,
+                         var_tissue = var_tissue,
+                         var_numeric_covariate = var_numeric_covariate)
   enrolled <- which(sim$label <= n_labels)
   unknown <- if (n_unknown_individuals > 0L) {
     unlist(lapply(seq_len(n_unknown_individuals), function(i) {
@@ -118,13 +149,15 @@ simulate_dataset <- function(type, var_label, var_discrete, var_cont, n_per_labe
   is_unknown <- label_true > n_labels
   ids <- sprintf("S%05d", seq_along(keep))
   dimnames(X) <- list(ids, sprintf("F%04d", seq_len(n_features)))
+  tissue <- paste0("tissue_", sim$tissue[keep])
   list(
     X = X,
     meta = data.table(sample = ids, label_true = label_true,
                       label_observed = c(mi$label, unknown_labels),
                       is_misid = c(mi$is_misid, rep(TRUE, length(unknown))),
                       is_unknown = is_unknown,
-                      batch = sim$batch[keep], time = sim$time[keep])
+                      batch = sim$batch[keep], time = sim$time[keep],
+                      tissue = tissue)
   )
 }
 
@@ -155,9 +188,48 @@ grid <- rbind(
      misid_rate   = c(0, 0.1, 0.4),
      rep          = 1:3)
 )
-grid[, `:=`(var_discrete = fifelse(nuisance == "both", 0.3, 0),
-            var_cont = fifelse(nuisance == "both", 0.2, 0))]
-stopifnot(all(grid$var_label + grid$var_discrete + grid$var_cont <= 1))
+if (!exists("covariate_nuisance_levels")) {
+  covariate_nuisance_levels <- "none"
+}
+if (!is.character(covariate_nuisance_levels) ||
+    !length(covariate_nuisance_levels) ||
+    anyNA(covariate_nuisance_levels) ||
+    any(!covariate_nuisance_levels %in%
+        c("none", "categorical", "numeric", "both"))) {
+  stop("covariate_nuisance_levels must contain only none, categorical, numeric, or both.")
+}
+covariate_nuisance_levels <- unique(covariate_nuisance_levels)
+grid <- grid[rep(seq_len(.N), each = length(covariate_nuisance_levels))]
+grid[, covariate_nuisance := rep(
+  covariate_nuisance_levels,
+  times = nrow(grid) / length(covariate_nuisance_levels)
+)]
+grid[, `:=`(
+  var_discrete = fifelse(nuisance == "both", 0.3, 0),
+  var_cont = fifelse(nuisance == "both", 0.2, 0),
+  var_tissue = 0,
+  var_numeric_covariate = 0
+)]
+grid[covariate_nuisance %in% c("categorical", "both"),
+     var_tissue := 0.2]
+grid[covariate_nuisance %in% c("numeric", "both"),
+     var_numeric_covariate := 0.2]
+# Covariate scenarios replace the existing nuisance share so every variance
+# budget remains within 1; the tissue/time effects are the explicit nuisance.
+grid[covariate_nuisance != "none", `:=`(
+  var_discrete = 0,
+  var_cont = 0
+)]
+if (!exists("n_tissues")) n_tissues <- 4L
+if (!is.numeric(n_tissues) || length(n_tissues) != 1L ||
+    !is.finite(n_tissues) || n_tissues < 1L ||
+    n_tissues != floor(n_tissues)) {
+  stop("n_tissues must be a positive integer.")
+}
+n_tissues <- as.integer(n_tissues)
+grid[, n_tissues := n_tissues]
+stopifnot(all(grid$var_label + grid$var_discrete + grid$var_cont +
+              grid$var_tissue + grid$var_numeric_covariate <= 1))
 grid[, scenario := .I]
 grid[, seed := 1000L + scenario]
 if (!exists("n_unknown_individuals")) n_unknown_individuals <- 1L
@@ -185,6 +257,13 @@ simulate_grid <- function(grid, ...) {
                           g$n_per_label, misid_rate = g$misid_rate,
                           n_unknown_individuals = g$n_unknown_individuals,
                           unknown_samples_per_individual = g$unknown_samples_per_individual,
+                          n_tissues = if ("n_tissues" %in% names(g)) g$n_tissues else 4L,
+                          var_tissue = if ("var_tissue" %in% names(g)) g$var_tissue else 0,
+                          var_numeric_covariate = if ("var_numeric_covariate" %in% names(g)) {
+                            g$var_numeric_covariate
+                          } else {
+                            0
+                          },
                           ...)
     d$params <- g
     d

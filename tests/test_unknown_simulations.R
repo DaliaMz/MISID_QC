@@ -12,6 +12,20 @@ stopifnot(nrow(synthetic_grid_counts) == 360L,
           setequal(synthetic$grid[ n_unknown_individuals == 1L, scenario], 1:360),
           setequal(synthetic$grid[n_unknown_individuals == 0L, scenario], 361:720),
           !anyDuplicated(synthetic$grid$scenario))
+covariate_grid_env <- new.env(parent = globalenv())
+covariate_grid_env$covariate_nuisance_levels <-
+  c("none", "categorical", "numeric", "both")
+covariate_grid_env$n_unknown_individuals <- 0L
+sys.source("simulations/Simulate_full_dataset.R", envir = covariate_grid_env)
+stopifnot(nrow(covariate_grid_env$grid) == 1440L,
+          setequal(covariate_grid_env$grid$covariate_nuisance,
+                   c("none", "categorical", "numeric", "both")),
+          all(covariate_grid_env$grid$n_tissues == 4L),
+          all(covariate_grid_env$grid$var_label +
+              covariate_grid_env$grid$var_discrete +
+              covariate_grid_env$grid$var_cont +
+              covariate_grid_env$grid$var_tissue +
+              covariate_grid_env$grid$var_numeric_covariate <= 1))
 for (type in c("gaussian", "rnaseq", "olink")) {
   set.seed(42)
   sim <- synthetic$simulate_dataset(
@@ -28,6 +42,8 @@ for (type in c("gaussian", "rnaseq", "olink")) {
             all(unknown$is_misid), !any(known$is_misid),
             all(unknown$label_observed %in% known$label_true),
             !any(unknown$label_true %in% meta$label_observed),
+            all(!is.na(meta$tissue)), all(nzchar(meta$tissue)),
+            all(is.finite(meta$time)),
             identical(rownames(sim$X), meta$sample))
 }
 set.seed(42)
@@ -36,7 +52,9 @@ clean <- synthetic$simulate_dataset(
   n_features = 20, misid_rate = 0, n_unknown_individuals = 0
 )
 stopifnot(nrow(clean$meta) == 30L, !any(clean$meta$is_unknown),
-          !any(clean$meta$is_misid))
+          !any(clean$meta$is_misid),
+          all(!is.na(clean$meta$tissue)), all(nzchar(clean$meta$tissue)),
+          all(is.finite(clean$meta$time)))
 small_grid <- data.table(type = "gaussian", var_label = 0.5,
                          var_discrete = 0, var_cont = 0, n_per_label = 6,
                          misid_rate = 0, seed = 42L, scenario = 1L,
@@ -45,6 +63,40 @@ small_grid <- data.table(type = "gaussian", var_label = 0.5,
 generated <- synthetic$simulate_grid(small_grid, n_labels = 5, n_features = 20)[[1L]]
 stopifnot(sum(generated$meta$is_unknown) == 2L,
           generated$params$n_unknown_individuals == 1L)
+set.seed(43)
+categorical_covariate <- synthetic$simulate_dataset(
+  "gaussian", 0.2, 0.1, 0.1, n_per_label = 6, n_labels = 5,
+  n_features = 20, misid_rate = 0, n_unknown_individuals = 1,
+  unknown_samples_per_individual = 2, n_tissues = 3L, var_tissue = 0.2
+)
+stopifnot(uniqueN(categorical_covariate$meta$tissue) == 3L,
+          all(!is.na(categorical_covariate$meta$tissue)),
+          all(is.finite(categorical_covariate$meta$time)))
+set.seed(44)
+numeric_covariate <- synthetic$simulate_dataset(
+  "gaussian", 0.2, 0.1, 0.1, n_per_label = 6, n_labels = 5,
+  n_features = 20, misid_rate = 0, n_unknown_individuals = 1,
+  unknown_samples_per_individual = 2, var_numeric_covariate = 0.2
+)
+stopifnot(all(is.finite(numeric_covariate$meta$time)),
+          diff(range(numeric_covariate$meta$time)) > 0)
+set.seed(45)
+both_covariates <- synthetic$simulate_dataset(
+  "gaussian", 0.2, 0.1, 0.1, n_per_label = 6, n_labels = 5,
+  n_features = 20, misid_rate = 0, n_unknown_individuals = 1,
+  unknown_samples_per_individual = 2, n_tissues = 3L,
+  var_tissue = 0.2, var_numeric_covariate = 0.2
+)
+stopifnot(uniqueN(both_covariates$meta$tissue) == 3L,
+          all(is.finite(both_covariates$meta$time)))
+stopifnot(inherits(try(synthetic$simulate_dataset(
+  "gaussian", 0.2, 0.1, 0.1, n_per_label = 6,
+  n_tissues = 1L, var_tissue = 0.2
+), silent = TRUE), "try-error"))
+stopifnot(inherits(try(synthetic$simulate_dataset(
+  "gaussian", 0.2, 0.1, 0.1, n_per_label = 6,
+  var_tissue = 0.8
+), silent = TRUE), "try-error"))
 for (file in c("R/lda.R", "R/validation.R", "R/check_annotations.R")) {
   sys.source(file, envir = synthetic)
 }
@@ -94,6 +146,21 @@ stopifnot(
            c("tissue_a", "tissue_b")),
   nrow(covariate_result$predictions) == nrow(covariate_meta),
   identical(covariate_result$calibration$covariate_method, "residualize")
+)
+set.seed(46)
+both_covariate_result <- synthetic$check_annotations(
+  t(both_covariates$X), as.data.frame(both_covariates$meta),
+  "sample", "label_observed", progress = FALSE, min_agreement = 0,
+  mismatch_rate = 0, detect_unknown = TRUE,
+  covariate_col = c("tissue", "time")
+)
+stopifnot(
+  identical(names(both_covariate_result$covariate_adjustment$covariates),
+            c("tissue", "time")),
+  identical(both_covariate_result$covariate_adjustment$covariates$tissue$type,
+            "categorical"),
+  identical(both_covariate_result$covariate_adjustment$covariates$time$type,
+            "numeric")
 )
 covariate_x <- matrix(c(1, 3, 5, 7, 2, 4, 6, 8), nrow = 4L)
 covariate_residual <- synthetic$.covariate_residualize(
@@ -160,6 +227,18 @@ stopifnot(saved$params$n_unknown_individuals == 2L,
           saved$params$unknown_samples_per_individual == 2L)
 gtex$n_unknown_individuals <- 0L
 stopifnot(!any(gtex$build_scenario(scenario)$is_unknown))
+matched_individual <- copy(scenario)
+matched_individual[, `:=`(
+  matching = "paired",
+  n_labels = 10L,
+  n_per_label = 4L
+)]
+gtex$n_unknown_individuals <- 0L
+matched_individual_meta <- gtex$build_scenario(matched_individual)
+stopifnot(nrow(matched_individual_meta) == 40L,
+          all(matched_individual_meta[, uniqueN(SMTSD), by = ID][
+            , V1] == 4L),
+          uniqueN(matched_individual_meta$SMTSD) <= 4L)
 gtex$n_unknown_individuals <- 100L
 stopifnot(inherits(try(gtex$build_scenario(scenario), silent = TRUE),
                    "try-error"))
@@ -177,6 +256,23 @@ stopifnot(nrow(tissue_unknown) == 2L,
       all(tissue_unknown$label_observed %in% tissue_known$label_true),
       !any(tissue_unknown$label_true %in% tissue_meta$label_observed),
       uniqueN(tissue_unknown$ID) == 2L)
+matched_tissue <- copy(tissue)
+matched_tissue[, `:=`(matching = "paired", n_unknown_tissues = 0L)]
+gtex$n_unknown_tissues <- 0L
+matched_tissue_meta <- gtex$build_scenario(matched_tissue)
+matched_tissue_ids <- matched_tissue_meta[, .(ID = unique(ID))]
+common_across_tissues <- matched_tissue_meta[
+  , .(n_tissues = uniqueN(SMTSD)), by = ID]
+stopifnot(nrow(matched_tissue_meta) ==
+            uniqueN(matched_tissue_meta$SMTS) *
+            matched_tissue$n_per_label,
+          all(common_across_tissues$n_tissues > 0L),
+          all(matched_tissue_meta[, .(n = uniqueN(ID)), by = SMTS][, n] ==
+              matched_tissue$n_per_label),
+          length(Reduce(intersect,
+                        split(matched_tissue_meta$ID,
+                              matched_tissue_meta$SMTS))) ==
+            matched_tissue$n_per_label)
 tissue_saved <- gtex$simulate_gtex_grid(tissue)[[1L]]
 stopifnot(tissue_saved$params$unknown_samples_per_tissue == 2L,
           sum(tissue_saved$meta$is_unknown) == 2L)
@@ -198,6 +294,10 @@ stopifnot(setequal(gtex_grid_counts$task, c("individual", "tissue")),
       setequal(gtex_grid_counts[task == "tissue", n_unknown_tissues],
            c(0L, 1L)),
           !anyDuplicated(gtex$grid$scenario))
+gtex$matching_modes <- c("random", "paired")
+sys.source("simulations/Simulate_from_GTEX_grid.R", envir = gtex)
+stopifnot(setequal(gtex$grid$matching, c("random", "paired")),
+          length(unique(gtex$grid$scenario)) == nrow(gtex$grid))
 
 source("simulations/score_unknown.R")
 truth <- data.frame(sample = letters[1:6],
