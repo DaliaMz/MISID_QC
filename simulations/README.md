@@ -129,15 +129,17 @@ and prints the key numbers. Q1 to Q4 use one config (the most common, or
 
 ## Simulated-dataset benchmark
 
-`Simulate_full_dataset.R` builds 360 base settings as one crossed design with 3
-repetitions per cell. Each setting has an unknown and a no-unknown version,
-giving 720 scenarios total. Gaussian (324 base settings) is the full factorial of label variance
-(0.05, 0.2, 0.5), nuisance variance (none, or discrete 0.3 plus continuous
-0.2), samples per label (6, 10, 20) and mislabel rate (0, 0.02, 0.05, 0.1, 0.2,
-0.4). RNA-seq and Olink (18 each) check that the findings carry over, at label
-variance 0.2 and 10 samples per label, crossed with the same nuisance levels
-and rates 0, 0.1, 0.4. The scenario numbering is new, so results from the
-earlier grid are not comparable scenario by scenario. `introduce_misid()`
+`Simulate_full_dataset.R` and both GTEx tasks use the shared benchmark grid:
+mislabel rates `0, 0.05, 0.1, 0.2, 0.4`, group counts
+`3, 5, 10, 20`, and samples per group `3, 6, 10, 20, 30`, with 3 repetitions.
+The synthetic grid adds Gaussian label variance `0.05, 0.2, 0.5`, nuisance
+variance (none or both batch and continuous), and data types Gaussian, RNA-seq,
+and Olink. The base synthetic grid contains 3,000 settings; the unknown/no-
+unknown expansion produces 6,000 scenarios. Covariate-mode expansion is
+controlled separately. The GTEx tissue and individual grids use the same
+mislabel-rate, group-count, and sample-count dimensions. The scenario numbering
+is new, so results from earlier grids are not comparable scenario by scenario.
+`introduce_misid()`
 redraws when a label would keep fewer than 2 samples, which the package
 requires. Use `subset="rep==1"` for a third of the grid.
 
@@ -194,11 +196,12 @@ flags. Configuration names include `nogeneral` to avoid resuming older calls.
 
 ## GTEx benchmark scenarios and settings
 
-`Simulate_from_GTEX_grid.R` builds 150 base settings: tissue (6 or 12 tissues, 10
-or 20 samples each) and individual (20 or 40 individuals; 4, 10 or all
-samples) tasks with random tissue sets only, at mislabel rates 0, 0.05, 0.1,
-0.2 and 0.4, with 3 repetitions. Each base setting has an unknown-class and a
-no-unknown version, for up to 300 scenarios. The numbering and seeds come from the original
+`Simulate_from_GTEX_grid.R` builds tissue and individual tasks with the shared
+group and sample-count grid: 3, 5, 10, or 20 groups and 3, 6, 10, 20, or 30
+samples per group, at mislabel rates 0, 0.05, 0.1, 0.2, and 0.4, with 3
+repetitions. This gives 600 base GTEx settings and 1,200
+unknown/no-unknown scenarios before filtering or insufficient-source checks.
+The numbering and seeds come from the original
 Set `matching_modes="paired"` before sourcing to generate tissue-matched
 individual scenarios or individual-matched tissue scenarios. In paired
 individual scenarios, each selected donor receives one sample from the same
@@ -207,7 +210,7 @@ tissue scenarios, each tissue label uses the same set of donors. Set
 `matching_modes=c("random","paired")` to benchmark both designs; the default
 remains `"random"` and preserves existing scenario numbering. The numbering and seeds come from the original
 grid, so scenarios shared with earlier runs keep their numbers and seeds. Set
-`keep_sets`, `keep_rates` or `keep_individual_n` before sourcing to change the
+`keep_sets` or `keep_rates` before sourcing to change the
 subset. The runners default to 5-fold CV and
 `mismatch_repeats=3`, so detection sensitivity is in-sample, and to
 `min_agreement=0` (agreement gate off). `first_pass_agreement` is recorded per

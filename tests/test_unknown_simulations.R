@@ -4,20 +4,22 @@ library(data.table)
 synthetic <- new.env(parent = globalenv())
 sys.source("simulations/Simulate_full_dataset.R", envir = synthetic)
 synthetic_grid_counts <- synthetic$grid[, .N, by = .(
-  type, var_label, nuisance, n_per_label, misid_rate, rep
+  type, var_label, nuisance, n_labels, n_per_label, misid_rate, rep
 )]
-stopifnot(nrow(synthetic_grid_counts) == 360L,
+stopifnot(nrow(synthetic_grid_counts) == 3000L,
           all(synthetic_grid_counts$N == 2L),
           setequal(synthetic$grid$n_unknown_individuals, c(0L, 1L)),
-          setequal(synthetic$grid[ n_unknown_individuals == 1L, scenario], 1:360),
-          setequal(synthetic$grid[n_unknown_individuals == 0L, scenario], 361:720),
+          setequal(synthetic$grid$n_labels, c(3L, 5L, 10L, 20L)),
+          setequal(synthetic$grid$n_per_label, c(3L, 6L, 10L, 20L, 30L)),
+          setequal(synthetic$grid$misid_rate, c(0, 0.05, 0.1, 0.2, 0.4)),
+          nrow(synthetic$grid) == 6000L,
           !anyDuplicated(synthetic$grid$scenario))
 covariate_grid_env <- new.env(parent = globalenv())
 covariate_grid_env$covariate_nuisance_levels <-
   c("none", "categorical", "numeric", "both")
 covariate_grid_env$n_unknown_individuals <- 0L
 sys.source("simulations/Simulate_full_dataset.R", envir = covariate_grid_env)
-stopifnot(nrow(covariate_grid_env$grid) == 1440L,
+stopifnot(nrow(covariate_grid_env$grid) == 12000L,
           setequal(covariate_grid_env$grid$covariate_nuisance,
                    c("none", "categorical", "numeric", "both")),
           all(covariate_grid_env$grid$n_tissues == 4L),

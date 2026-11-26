@@ -27,6 +27,7 @@
 # Expected inputs (as in the draft script): `expr_vst` genes x samples (VST),
 # `sample_info` with SAMPID, SMTS, SMTSD.
 suppressMessages(library(data.table))
+sys.source("simulations/Benchmark_grid.R", envir = environment())
 
 if (!exists("expr_vst") || !exists("sample_info")) {
   ddir <- "/home/projects/ssi_gen1/people/dalmiz/Sample_Misassignment_0826/GTEX/data/"
@@ -303,10 +304,8 @@ build_gtex_dataset <- function(meta, n_features = 2000) {
 # filtered afterwards, so the remaining scenarios keep the numbers and seeds of
 # earlier runs and results can be compared scenario by scenario.
 if (!exists("keep_sets")) keep_sets <- "random"
-# Smaller benchmark subset: fewer mislabel rates and fewer samples-per-label
-# levels for the individual task. Set these before sourcing to change them.
+# Optional benchmark subset filters. Set these before sourcing to change them.
 if (!exists("keep_rates")) keep_rates <- c(0, 0.05, 0.1, 0.2, 0.4)
-if (!exists("keep_individual_n")) keep_individual_n <- c(4, 10, Inf)
 if (!exists("matching_modes")) matching_modes <- "random"
 if (!is.character(matching_modes) || !length(matching_modes) ||
     anyNA(matching_modes) ||
@@ -316,29 +315,21 @@ if (!is.character(matching_modes) || !length(matching_modes) ||
 matching_modes <- unique(matching_modes)
 grid <- rbind(
   CJ(task = "tissue",
-     set = c("random", "similar"),
-     n_labels = c(6, 12),
-     n_per_label = c(10, 20),
-     misid_rate = c(0, 0.05, 0.1, 0.2),  # 0 measures false positives on clean data
-     rep = 1:3),
+     set = "random",
+     n_labels = benchmark_n_groups,
+     n_per_label = benchmark_n_per_group,
+     misid_rate = benchmark_misid_rates,
+     rep = benchmark_reps),
   CJ(task = "individual",
-     set = c("similar", "random", "dissimilar"),
-     n_labels = c(20, 40),
-     n_per_label = c(4, 7, 10, 15, 20, Inf),
-     misid_rate = c(0, 0.05, 0.1, 0.2),
-     rep = 1:3),
-  # Extra high mislabel rates, to reach low first-pass agreement and see where
-  # the internal estimates stop matching the truth.
-  CJ(task = "tissue", set = "random", n_labels = c(6, 12),
-     n_per_label = c(10, 20), misid_rate = c(0.3, 0.4), rep = 1:3),
-  CJ(task = "individual", set = "random", n_labels = c(20, 40),
-     n_per_label = c(4, 7, 10, 15, 20, Inf), misid_rate = c(0.3, 0.4),
-     rep = 1:3)
+     set = "random",
+     n_labels = benchmark_n_groups,
+     n_per_label = benchmark_n_per_group,
+     misid_rate = benchmark_misid_rates,
+     rep = benchmark_reps)
 )
 grid[, scenario := .I]
 grid[, seed := 5000L + scenario]
-grid <- grid[set %in% keep_sets & misid_rate %in% keep_rates &
-               (task == "tissue" | n_per_label %in% keep_individual_n)]
+grid <- grid[set %in% keep_sets & misid_rate %in% keep_rates]
 base_scenarios <- rep(grid$scenario, each = length(matching_modes))
 grid <- grid[rep(seq_len(.N), each = length(matching_modes))]
 grid[, `:=`(

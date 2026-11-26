@@ -2,6 +2,7 @@
 # explicit tissue and time covariates, and mis-identified labels.
 # Grid: data type x label variance share x nuisance/covariate shares x samples/label.
 library(data.table)
+sys.source("simulations/Benchmark_grid.R", envir = environment())
 
 # ---- Simulation -------------------------------------------------------------
 
@@ -172,21 +173,24 @@ simulate_dataset <- function(type, var_label, var_discrete, var_cont, n_per_labe
 # from the truth, mainly as a function of first-pass agreement. That is driven by
 # label signal (var_label), mislabel rate and replication; the discrete and
 # continuous nuisance variance are contrasted as one factor ("nuisance"), none
-# versus both. rate 0 measures false positives on clean data. n_per_label >= 6
-# keeps cv_folds = 5 usable. The agreement gate is off in the runner.
+# versus both. Mislabel rate 0 measures false positives on clean data.
+# The shared group and sample counts span 3-20 groups and 3-30 samples per
+# group. The agreement gate is off in the runner.
 grid <- rbind(
   CJ(type = "gaussian",
      var_label    = c(0.05, 0.2, 0.5),
      nuisance     = c("none", "both"),
-     n_per_label  = c(6, 10, 20),
-     misid_rate   = c(0, 0.02, 0.05, 0.1, 0.2, 0.4),
-     rep          = 1:3),
+     n_labels     = benchmark_n_groups,
+     n_per_label  = benchmark_n_per_group,
+     misid_rate   = benchmark_misid_rates,
+     rep          = benchmark_reps),
   CJ(type = c("rnaseq", "olink"),
      var_label    = 0.2,
      nuisance     = c("none", "both"),
-     n_per_label  = 10,
-     misid_rate   = c(0, 0.1, 0.4),
-     rep          = 1:3)
+     n_labels     = benchmark_n_groups,
+     n_per_label  = benchmark_n_per_group,
+     misid_rate   = benchmark_misid_rates,
+     rep          = benchmark_reps)
 )
 if (!exists("covariate_nuisance_levels")) {
   covariate_nuisance_levels <- "none"
@@ -253,18 +257,25 @@ simulate_grid <- function(grid, ...) {
   res <- lapply(seq_len(nrow(grid)), function(i) {
     g <- grid[i]
     set.seed(g$seed)
-    d <- simulate_dataset(g$type, g$var_label, g$var_discrete, g$var_cont,
-                          g$n_per_label, misid_rate = g$misid_rate,
-                          n_unknown_individuals = g$n_unknown_individuals,
-                          unknown_samples_per_individual = g$unknown_samples_per_individual,
-                          n_tissues = if ("n_tissues" %in% names(g)) g$n_tissues else 4L,
-                          var_tissue = if ("var_tissue" %in% names(g)) g$var_tissue else 0,
-                          var_numeric_covariate = if ("var_numeric_covariate" %in% names(g)) {
-                            g$var_numeric_covariate
-                          } else {
-                            0
-                          },
-                          ...)
+    args <- list(
+      g$type, g$var_label, g$var_discrete, g$var_cont, g$n_per_label,
+      misid_rate = g$misid_rate,
+      n_unknown_individuals = g$n_unknown_individuals,
+      unknown_samples_per_individual = g$unknown_samples_per_individual,
+      n_tissues = if ("n_tissues" %in% names(g)) g$n_tissues else 4L,
+      var_tissue = if ("var_tissue" %in% names(g)) g$var_tissue else 0,
+      var_numeric_covariate = if ("var_numeric_covariate" %in% names(g)) {
+        g$var_numeric_covariate
+      } else {
+        0
+      }
+    )
+    if ("n_labels" %in% names(g) && !("n_labels" %in% names(list(...)))) {
+      args$n_labels <- g$n_labels
+    }
+    extra <- list(...)
+    args <- c(args, extra)
+    d <- do.call(simulate_dataset, args)
     d$params <- g
     d
   })

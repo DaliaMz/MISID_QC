@@ -11,9 +11,8 @@
 # (simulations/logs must already exist, or the job fails silently)
 # Afterwards:   Rscript simulations/Aggregate_gtex_results.R
 #
-# Up to 300 scenarios (150 base settings with and without unknown classes,
-# random tissue sets, mislabel rates 0 to 0.4) split over 30 array tasks
-# (10 each). Change --array and
+# random tissue sets, mislabel rates 0 to 0.4) split over 30 array tasks.
+# Change --array and
 # N_TASKS together; "%15" caps how many tasks run at once. A task that is
 # requeued or times out resumes, because finished scenarios are skipped.
 # The default run is the primary config only (5-fold CV, 3 label-swap repeats,
