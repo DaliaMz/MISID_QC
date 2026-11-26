@@ -36,34 +36,22 @@
 #'   this value, the function stops before calibration. Defaults to 0.6;
 #'   a warning is issued when agreement is below 0.75.
 #' @param margin_coverage Quantile used to set the first-pass holdout cutoff.
-#'   The reference values are chosen by `holdout_reference`.
-#' @param holdout_reference Whether to use the top-versus-second margin
-#'   (`"top"`) or pool the top-versus-each-alternative margins
-#'   (`"all_alternatives"`) from correctly predicted samples. Samples predicted
-#'   incorrectly with an annotation margin (top versus observed score) above
-#'   this threshold are treated as confidently misassigned and excluded from
-#'   the threshold reference set. The same choice is applied to simulated
-#'   mismatches. The original out-of-fold models are not refit after holdout.
+#'   The cutoff pools top-versus-each-alternative margins from correctly
+#'   predicted samples. The original out-of-fold models are not refit after holdout.
 #' @param mismatch_rate Fraction of reference samples whose labels are swapped
 #'   pairwise in the simulation. `"held_out"` uses the fraction of all input
 #'   samples held out in the first pass, applied to the simulation reference
 #'   samples. Swaps are rounded to whole pairs, with at least one pair for
 #'   `"held_out"`, even when no samples were held out. The actual simulated
-#'   fraction may differ. `NULL` or numeric 0 disables the simulation.
+#'   fraction may differ. A positive numeric rate or `"held_out"` is required.
 #' @param mismatch_repeats Number of independent label-swap simulations whose
-#'   results are pooled to tune the annotation cutoff. With at least two
-#'   repeats, detection sensitivity and simulated specificity are cross-fitted:
-#'   each repeat is scored with a cutoff tuned on the other repeats' swapped
-#'   and unchanged samples and the reference negatives. More repeats give a less extreme
-#'   cutoff and a steadier sensitivity estimate at the cost of roughly
-#'   proportional simulation time. With 1, sensitivity is in-sample.
+#'   results are pooled to tune the annotation cutoff. Sensitivity and
+#'   specificity are in-sample simulation estimates.
 #' @param covariate_col Optional metadata column name, or character vector of
 #'   names, used to residualize expression before individual modelling. Categorical
 #'   covariates are fitted as fixed effects and numeric covariates as linear
 #'   effects. Covariates are removed without using individual identities or
 #'   mislabel/unknown truth, and missing covariate values are rejected.
-#' @param covariate_method Fixed-effect covariate modelling method. Currently
-#'   only `"residualize"` is supported.
 #' @param diagnostics Whether to include intermediate gate data in the result.
 #'   This is intended for understanding and plotting the validation steps; it
 #'   can add substantially to the result size.
@@ -74,23 +62,14 @@
 #'   only at or above the correction cutoff. Without a usable cutoff,
 #'   disagreements have `predicted_id_clean = NA`. `predicted_id` always
 #'   retains the raw prediction.
+#' @param min_correction_samples Minimum number of eligible simulated rows
+#'   retained at the correction cutoff before candidate corrections are enabled.
+#' @param correction_repeat_tolerance Maximum permitted shortfall of the lowest
+#'   repeat-level correction accuracy below `min_accuracy`.
 #' @param detect_unknown If `FALSE`, unknown-individual detection is switched
 #'   off: no stranger validation is run, no sample is marked as a potential
 #'   unknown individual.
 #'   `feasibility$unknown_individual_detection` is `"not_assessed"`.
-#' @param unknown_threshold_method How the unknown-individual cutoff is chosen.
-#'   `"simulated"` (default) uses the nearest-class Mahalanobis distance.
-#'   `"mad"` restores the robust top-margin rule. `"knn"` uses distance to
-#'   nearby in-class training residuals, `"global_mahalanobis"` uses distance
-#'   from the pooled cohort center, and `"pca_residual"` uses reconstruction
-#'   residual outside leading pooled within-class principal components.
-#'   Non-MAD methods use the target-specificity quantile and simulated stranger
-#'   scores to select an upper cutoff. Samples beyond the cutoff are marked as
-#'   potential unknown individuals and cannot receive candidate corrections;
-#'   the flag does not hide `predicted_id_clean`.
-#'   No share of samples is forced to be unknown.
-#' @param unknown_mad Multiplier used only when
-#'   `unknown_threshold_method = "mad"`.
 #' @param unknown_stray_samples Unknown-individual validation pretends each
 #'   enrolled individual is a stranger. Up to this many of their samples (never
 #'   all of them) are kept in the data relabelled as random other individuals,
@@ -101,12 +80,11 @@
 #'   repeated for each individual separately. If `TRUE`
 #'   and `cv_folds` is set, individuals are removed in `cv_folds` groups
 #'   instead, so far fewer models are fit, at the cost of slightly optimistic
-#'   (too large) unknown margins. With the default
-#'   `unknown_threshold_method = "simulated"` it also affects the unknown
-#'   cutoff.
+#'   (too large) unknown distances. It also affects the unknown cutoff.
 #' @return A list with sample-level `predictions`, raw `identity_scores`,
-#'   `performance`, `calibration`, `covariate_adjustment`, `risk_coverage` (see
-#'   [plot_risk_coverage()]), `mismatch_simulation`, `unknown_simulation`,
+#'   `performance`, `calibration`, `covariate_adjustment`,
+#'   `correction_gate`,
+#'   `mismatch_simulation`, `unknown_simulation`,
 #'   `unknown_simulation_scores`, `held_out` (count, fraction and IDs of samples held out as
 #'   confidently misassigned, from the first pass), `feasibility`, and
 #'   `thresholds` components. `predictions$potential_unknown_individual` is a
@@ -144,8 +122,6 @@
 #'   represent real errors or unknown individuals. It is unavailable when
 #'   simulated rates are missing, uninformative, or incompatible with the
 #'   observed flag rate. Set `progress = TRUE` to display the summary.
-#'   `performance$all_alternatives_detection`
-#'   keeps the every-wrong-label diagnostic, and
 #'   `performance$recovery_accuracy_misannotated` and
 #'   `performance$correction_validation` report recovery on simulated
 #'   misannotated samples and the precision and recall of proposed corrections.
@@ -155,11 +131,9 @@
 #'   the precision of proposed corrections. The result records its threshold,
 #'   retained count, coverage and in-sample accuracy in `calibration$correction_margin`.
 #'   Identity recovery appears feasible when that cutoff exists and the input
-#'   has at least 20 samples; without swaps it is insufficient evidence.
-#'   Candidates must also pass the unknown and suspicious gates. Simulated
-#'   correction validation applies the margin-based unknown gate for `"mad"`,
-#'   but not the default distance-based unknown gate because simulated swap
-#'   distances are not recorded; it also does not apply feasibility. There is
+#'   has at least 20 samples. Candidate corrections must also pass the unknown
+#'   and suspicious gates. Simulated swap distances are not used by this
+#'   validation, and feasibility is not applied to the simulation rows. There is
 #'   no minimum retained simulated count; even one correct row
 #'   can meet the target. Repeated rows are dependent, and selecting and
 #'   evaluating the cutoff on the same simulations can be optimistic.
@@ -169,21 +143,15 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
                               assess_feasibility = TRUE,
                               progress = interactive(), cv_folds = NULL,
                               min_agreement = 0.6, margin_coverage = 0.025,
-                              holdout_reference = c("all_alternatives", "top"),
                               mismatch_rate = 0.1,
                               min_accuracy = 0.9, detect_unknown = TRUE,
-                              unknown_threshold_method = c("simulated", "mad", "knn",
-                                                           "global_mahalanobis",
-                                                           "pca_residual"),
-                              unknown_mad = 3,
                               grouped_unknown_validation = FALSE,
                               unknown_stray_samples = 2L,
                               mismatch_repeats = 3L,
                               covariate_col = NULL,
-                              covariate_method = c("residualize"),
+                              min_correction_samples = 20L,
+                              correction_repeat_tolerance = 0.05,
                               diagnostics = FALSE) {
-  unknown_threshold_method <- match.arg(unknown_threshold_method)
-  covariate_method <- match.arg(covariate_method)
   expr <- as.matrix(expr)
   storage.mode(expr) <- "double"
   if (length(dim(expr)) != 2L || nrow(expr) < 1L || ncol(expr) < 1L ||
@@ -221,6 +189,8 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       stop("covariate_col is missing from metadata: ",
            paste(missing_covariates, collapse = ", "))
     }
+      covariates <- metadata[, covariate_col, drop = FALSE]
+      .validate_covariates(covariates)
   }
   class_counts <- table(y)
   if (length(class_counts) < 2L || any(class_counts < 2L)) {
@@ -241,14 +211,53 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       margin_coverage > 1) {
     stop("margin_coverage must be a single number between 0 and 1.")
   }
-  holdout_reference <- match.arg(holdout_reference)
-  if (!is.null(mismatch_rate) &&
-      !(is.character(mismatch_rate) && length(mismatch_rate) == 1L &&
-        !is.na(mismatch_rate) && mismatch_rate == "held_out") &&
+  if (!is.numeric(min_accuracy) || is.complex(min_accuracy) ||
+      length(min_accuracy) != 1L || !is.finite(min_accuracy) ||
+      min_accuracy < 0 || min_accuracy > 1) {
+    stop("min_accuracy must be a single number between 0 and 1.")
+  }
+  if (!is.numeric(min_correction_samples) ||
+      length(min_correction_samples) != 1L ||
+      !is.finite(min_correction_samples) ||
+      min_correction_samples != floor(min_correction_samples) ||
+      min_correction_samples < 1L) {
+    stop("min_correction_samples must be a positive integer.")
+  }
+  min_correction_samples <- as.integer(min_correction_samples)
+  if (!is.numeric(correction_repeat_tolerance) ||
+      is.complex(correction_repeat_tolerance) ||
+      length(correction_repeat_tolerance) != 1L ||
+      !is.finite(correction_repeat_tolerance) ||
+      correction_repeat_tolerance < 0 ||
+      correction_repeat_tolerance > 1) {
+    stop("correction_repeat_tolerance must be a single number between 0 and 1.")
+  }
+  if (!is.numeric(unknown_stray_samples) ||
+      length(unknown_stray_samples) != 1L ||
+      !is.finite(unknown_stray_samples) ||
+      unknown_stray_samples != floor(unknown_stray_samples) ||
+      unknown_stray_samples < 1L) {
+    stop("unknown_stray_samples must be a positive integer.")
+  }
+  unknown_stray_samples <- as.integer(unknown_stray_samples)
+  if (!is.logical(detect_unknown) || length(detect_unknown) != 1L ||
+      is.na(detect_unknown)) {
+    stop("detect_unknown must be TRUE or FALSE.")
+  }
+  if (!is.logical(assess_feasibility) ||
+      length(assess_feasibility) != 1L || is.na(assess_feasibility)) {
+    stop("assess_feasibility must be TRUE or FALSE.")
+  }
+  if (!is.character(mismatch_rate) &&
       !(is.numeric(mismatch_rate) && !is.complex(mismatch_rate) &&
         length(mismatch_rate) == 1L && is.finite(mismatch_rate) &&
-        mismatch_rate >= 0 && mismatch_rate <= 1)) {
-    stop('mismatch_rate must be NULL, "held_out", or a single number between 0 and 1.')
+        mismatch_rate > 0 && mismatch_rate <= 1)) {
+    stop('mismatch_rate must be "held_out" or a single number greater than 0 and at most 1.')
+  }
+  if (is.character(mismatch_rate) &&
+      (length(mismatch_rate) != 1L || is.na(mismatch_rate) ||
+       mismatch_rate != "held_out")) {
+    stop('mismatch_rate must be "held_out" or a single number greater than 0 and at most 1.')
   }
   if (!is.numeric(mismatch_repeats) || length(mismatch_repeats) != 1L ||
       !is.finite(mismatch_repeats) || mismatch_repeats < 1L ||
@@ -269,6 +278,15 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   if (!is.logical(diagnostics) || length(diagnostics) != 1L ||
       is.na(diagnostics)) {
     stop("diagnostics must be TRUE or FALSE.")
+  }
+  if (!is.logical(grouped_unknown_validation) ||
+      length(grouped_unknown_validation) != 1L ||
+      is.na(grouped_unknown_validation)) {
+    stop("grouped_unknown_validation must be TRUE or FALSE.")
+  }
+  if (length(shrinkage) != 1L || !is.finite(shrinkage) ||
+      shrinkage < 0 || shrinkage > 1) {
+    stop("shrinkage must be a single number between 0 and 1.")
   }
 
   x <- t(expr)
@@ -299,9 +317,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     dimnames = list(rownames(x), names(class_counts))
   )
   nearest_distance <- rep(NA_real_, nrow(x))
-  global_mahalanobis <- rep(NA_real_, nrow(x))
-  pca_residual <- rep(NA_real_, nrow(x))
-  nearest_training_distance <- rep(NA_real_, nrow(x))
   n_folds <- if (is.null(cv_folds)) nrow(x) else as.integer(cv_folds)
   fold_id <- if (is.null(cv_folds)) {
     seq_len(nrow(x))
@@ -334,16 +349,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       model, x[test, , drop = FALSE]
     )
     nearest_distance[test] <- .nearest_class_distance(
-      model, x[test, , drop = FALSE]
-    )
-    global_mahalanobis[test] <- .global_mahalanobis_distance(
-      model, x[test, , drop = FALSE]
-    )
-    pca_residual[test] <- .pca_reconstruction_residual(
-      model, x[test, , drop = FALSE]
-    )
-    nearest_training_distance[test] <- .nearest_training_distance(
-      model, x[test, , drop = FALSE]
+      model, x[test, , drop = FALSE], oof_scores[test, , drop = FALSE]
     )
     if (isTRUE(progress) &&
         (fold %% fold_progress_interval == 0L || fold == n_folds)) {
@@ -356,7 +362,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     }
   }
 
-  class_index <- match(y, colnames(oof_scores))
   margins <- .score_margins(oof_scores, y)
   predicted_id <- margins$predicted
   correct_identity <- margins$correct
@@ -385,7 +390,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   top_margin <- margins$top_margin
   annotation_margin <- margins$annotation_margin
   top_margin_threshold <- .holdout_threshold(
-    oof_scores, correct_identity, margin_coverage, holdout_reference
+    oof_scores, correct_identity, margin_coverage
   )
   confidently_misassigned <- !correct_identity &
     annotation_margin > top_margin_threshold
@@ -425,9 +430,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # Confidently misassigned samples are probable misannotations; keeping them
   # in the reference set would inflate the thresholds and mask the errors.
   reference <- !confidently_misassigned
-  # Every wrong identity as a false label: margin = top score - that score.
-  is_observed <- col(oof_scores) == class_index
-  false_margin <- (margins$top_score - oof_scores)[!is_observed]
   validate_unknown <- function() .unknown_validation(
     x, y, shrinkage, exclude = confidently_misassigned, progress = progress,
     n_strays = as.integer(unknown_stray_samples),
@@ -438,17 +440,13 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     }
   )
   unknown <- if (!detect_unknown) {
-    list(n = 0L, top_margin = numeric(), distance = numeric(),
-         global_mahalanobis = numeric(), pca_residual = numeric(),
-         knn = numeric())
+    list(n = 0L, distance = numeric())
   } else {
     validate_unknown()
   }
   simulation <- NULL
   clean_counts <- table(y[reference])
-  if (!is.null(simulation_rate) &&
-      (simulation_rate > 0 || mismatch_rate_held_out) &&
-      sum(clean_counts >= 2L) >= 2L) {
+  if (sum(clean_counts >= 2L) >= 2L) {
     clean <- reference & y %in% names(clean_counts)[clean_counts >= 2L]
     if (isTRUE(progress)) {
       message(sprintf(
@@ -462,8 +460,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       }
       draw <- .simulate_mismatches(
         x[clean, , drop = FALSE], y[clean], simulation_rate,
-        if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage,
-        holdout_reference
+        if (is.null(cv_folds)) NULL else n_folds, shrinkage, margin_coverage
       )
       if (!is.null(draw)) draw$repeat_id <- r
       draw
@@ -473,90 +470,49 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       simulation <- do.call(rbind, draws)
     }
   }
+    if (is.null(simulation)) {
+      stop("At least two reference individuals with two clean samples each are required to simulate label swaps.")
+    }
   swap_margin_positives <- if (!is.null(simulation)) {
     simulation$annotation_margin[simulation$actually_misannotated]
-  } else {
-    numeric()
-  }
-  swap_margin_negatives <- if (!is.null(simulation)) {
+    } else numeric()
+    swap_margin_negatives <- if (!is.null(simulation)) {
     simulation$annotation_margin[!simulation$actually_misannotated]
-  } else {
-    numeric()
-  }
+    } else numeric()
   margin_threshold <- .select_threshold(
     annotation_margin[reference],
-    if (length(swap_margin_positives)) swap_margin_positives else false_margin,
+      swap_margin_positives,
     target_specificity, "upper", additional_negatives = swap_margin_negatives
   )
-  risk_coverage <- cbind(
-    source = "observed",
-    .risk_coverage(top_margin, correct_identity),
-    stringsAsFactors = FALSE
-  )
-  if (!is.null(simulation)) {
-    risk_coverage <- rbind(risk_coverage, cbind(
-      source = "simulated",
-      .risk_coverage(simulation$top_margin, simulation$agreement_simulated,
-                     simulation$agreement_real),
-      stringsAsFactors = FALSE
-    ))
-  }
 
   correction_threshold <- .correction_threshold(simulation, min_accuracy)
+  correction_gate <- .correction_gate(
+    simulation, correction_threshold, length(y), min_accuracy,
+    min_correction_samples, correction_repeat_tolerance
+  )
   confident_prediction <- .confident_prediction(
     predicted_id, y, top_margin, correction_threshold$threshold
   )
   unknown_threshold <- if (!detect_unknown) {
-    -Inf
-  } else if (unknown_threshold_method == "mad") {
-    .unknown_margin_threshold(top_margin[reference], unknown_mad)
-  } else if (unknown_threshold_method == "knn") {
-    .select_threshold(nearest_training_distance[reference], unknown$knn,
-                      target_specificity, "upper")
-  } else if (unknown_threshold_method == "global_mahalanobis") {
-    .select_threshold(global_mahalanobis[reference],
-                      unknown$global_mahalanobis,
-                      target_specificity, "upper")
-  } else if (unknown_threshold_method == "pca_residual") {
-    .select_threshold(pca_residual[reference], unknown$pca_residual,
-                      target_specificity, "upper")
+    NA_real_
+  } else if (!unknown$n) {
+    NA_real_
   } else {
     .select_threshold(nearest_distance[reference], unknown$distance,
                       target_specificity, "upper")
   }
-  # "mad" flags a low top margin; all other enabled methods flag a large
-  # upper-tail statistic.
-  use_distance <- detect_unknown && unknown_threshold_method != "mad"
   unknown_statistic <- if (!detect_unknown) {
     rep(NA_real_, length(y))
-  } else if (unknown_threshold_method == "mad") {
-    top_margin
-  } else if (unknown_threshold_method == "knn") {
-    nearest_training_distance
-  } else if (unknown_threshold_method == "global_mahalanobis") {
-    global_mahalanobis
-  } else if (unknown_threshold_method == "pca_residual") {
-    pca_residual
   } else {
     nearest_distance
   }
-  stranger_statistic <- if (!detect_unknown) {
-    numeric()
-  } else if (unknown_threshold_method == "mad") {
-    unknown$top_margin
-  } else if (unknown_threshold_method == "knn") {
-    unknown$knn
-  } else if (unknown_threshold_method == "global_mahalanobis") {
-    unknown$global_mahalanobis
-  } else if (unknown_threshold_method == "pca_residual") {
-    unknown$pca_residual
-  } else {
-    unknown$distance
-  }
+  stranger_statistic <- unknown$distance
   is_unknown <- function(statistic) {
-    if (!detect_unknown) rep(FALSE, length(statistic))
-    else if (use_distance) statistic > unknown_threshold
-    else statistic < unknown_threshold
+    if (!detect_unknown || !is.finite(unknown_threshold)) {
+      rep(FALSE, length(statistic))
+    } else {
+      statistic > unknown_threshold
+    }
   }
   unknown_flag <- is_unknown(unknown_statistic)
   unknown_simulation <- unknown$records
@@ -567,16 +523,14 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     .binary_metrics(
       c(rep(FALSE, sum(reference)), rep(TRUE, unknown$n)),
       c(unknown_flag[reference], is_unknown(stranger_statistic)),
-      (if (use_distance) 1 else -1) *
-        c(unknown_statistic[reference], stranger_statistic)
+      c(unknown_statistic[reference], stranger_statistic)
     )
   }
   if (isTRUE(progress)) {
     message(sprintf(
-      "%d of %d samples lack a clean prediction (disagreement below correction margin %.3g); %d potential unknown (%s %.3g).",
+      "%d of %d samples lack a clean prediction (disagreement below correction margin %.3g); %d potential unknown (distance > %.3g).",
       sum(!confident_prediction), length(y), correction_threshold$threshold,
-      sum(unknown_flag), if (use_distance) "distance >" else "margin <",
-      unknown_threshold
+      sum(unknown_flag), unknown_threshold
     ))
   }
   # Flagging depends on the annotation margin alone: a clearly beaten observed
@@ -584,61 +538,28 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   # replacement, which needs a confident prediction.
   flagged <- annotation_margin > margin_threshold
 
-  # Every wrong label as a false label: a broad robustness diagnostic that
-  # also includes easily confused identities real swaps rarely involve.
-  all_alternatives_metrics <- .binary_metrics(
-    c(rep(FALSE, sum(reference)), rep(TRUE, length(false_margin))),
-    c(flagged[reference], false_margin > margin_threshold),
-    c(annotation_margin[reference], false_margin)
-  )
-  # Estimate simulated sensitivity and specificity on held-out repeats where possible.
+  # Estimate simulated sensitivity and specificity using the pairwise swaps.
   swap_simulation <- !is.null(simulation) && any(simulation$actually_misannotated)
-  if (swap_simulation) {
-    swap_margins <- simulation$annotation_margin[simulation$actually_misannotated]
-    misannotation_metrics <- .binary_metrics(
-      c(rep(FALSE, sum(reference)), rep(TRUE, length(swap_margins))),
-      c(flagged[reference], swap_margins > margin_threshold),
-      c(annotation_margin[reference], swap_margins)
-    )
-    crossfit <- .crossfit_swap_detection(
-      annotation_margin[reference], simulation, target_specificity
-    )
-    detection_source <- if (is.null(crossfit)) {
-      "simulated_swaps_in_sample"
-    } else {
-      "simulated_swaps_cross_fitted"
-    }
-  } else {
-    misannotation_metrics <- all_alternatives_metrics
-    crossfit <- NULL
-    detection_source <- "all_wrong_identities"
+  if (!swap_simulation) {
+    stop("The label-swap simulation did not produce swapped samples.")
   }
+  swap_margins <- simulation$annotation_margin[simulation$actually_misannotated]
+  misannotation_metrics <- .binary_metrics(
+    c(rep(FALSE, sum(reference)), rep(TRUE, length(swap_margins))),
+    c(flagged[reference], swap_margins > margin_threshold),
+    c(annotation_margin[reference], swap_margins)
+  )
+  detection_source <- "simulated_swaps_in_sample"
   misannotation_metrics$sensitivity_in_sample <- misannotation_metrics$sensitivity
   sim_negatives <- swap_margin_negatives
   sim_negatives <- sim_negatives[is.finite(sim_negatives)]
   misannotation_metrics$simulated_specificity_in_sample <- if (length(sim_negatives)) {
     mean(sim_negatives <= margin_threshold)
   } else NA_real_
-  misannotation_metrics$simulated_specificity <- if (is.null(crossfit)) {
-    misannotation_metrics$simulated_specificity_in_sample
-  } else crossfit$simulated_specificity
-  misannotation_metrics$n_simulated_negatives <- if (is.null(crossfit)) {
-    length(sim_negatives)
-  } else crossfit$n_simulated_negatives
-  if (!is.null(crossfit)) {
-    misannotation_metrics$sensitivity <- crossfit$sensitivity
-    misannotation_metrics$false_negative_rate <- 1 - crossfit$sensitivity
-  }
-  misannotation_metrics$sensitivity_sd <- if (is.null(crossfit)) {
-    NA_real_
-  } else {
-    crossfit$sensitivity_sd
-  }
-  misannotation_metrics$n_repeats_validated <- if (is.null(crossfit)) {
-    0L
-  } else {
-    crossfit$n_repeats
-  }
+  misannotation_metrics$simulated_specificity <- misannotation_metrics$simulated_specificity_in_sample
+  misannotation_metrics$n_simulated_negatives <- length(sim_negatives)
+  misannotation_metrics$sensitivity_sd <- NA_real_
+  misannotation_metrics$n_repeats_validated <- length(unique(simulation$repeat_id))
   misannotation_metrics$source <- detection_source
   estimated_detection_errors <- .estimate_detection_errors(
     flagged, misannotation_metrics$sensitivity,
@@ -663,7 +584,7 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     proposed <- simulation$annotation_margin > margin_threshold &
       simulation$top_margin >= max(
         correction_threshold$threshold,
-        if (use_distance || !detect_unknown) -Inf else unknown_threshold
+        -Inf
       ) &
       !simulation$agreement_simulated
     swapped <- simulation$actually_misannotated
@@ -704,11 +625,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   calibration <- list(
     method = "score_margin_threshold",
     covariates = covariate_summary,
-    covariate_method = if (is.null(covariate_summary)) NULL else covariate_method,
     margin_threshold = margin_threshold,
     exclusion_margin_threshold = top_margin_threshold,
-    holdout_reference = holdout_reference,
     correction_margin = correction_threshold,
+    correction_gate = correction_gate,
     prediction_coverage = mean(confident_prediction),
     min_accuracy = min_accuracy,
     first_pass_agreement = first_pass_agreement,
@@ -748,9 +668,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     top_score_margin = top_margin,
     annotation_score_margin = annotation_margin,
     nearest_class_distance = nearest_distance,
-    global_mahalanobis_distance = global_mahalanobis,
-    pca_reconstruction_residual = pca_residual,
-    nearest_training_distance = nearest_training_distance,
     unknown_detection_score = if (detect_unknown) unknown_statistic else
       rep(NA_real_, length(y)),
     unknown_detection_threshold = if (detect_unknown) {
@@ -775,7 +692,6 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     top_three_identity_recovery_accuracy = mean(top_three),
     misannotation_detection = misannotation_metrics,
     estimated_detection_errors = estimated_detection_errors,
-    all_alternatives_detection = all_alternatives_metrics,
     identity_recovery_accuracy = identity_recovery,
     recovery_accuracy_misannotated = recovery_misannotated,
     correction_validation = correction_validation,
@@ -793,11 +709,10 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       misannotation_metrics$sensitivity, misannotation_metrics$simulated_specificity,
       target_specificity, enough_known, swap_simulation
     )
-    recovery_status <- if (!enough_known || !swap_simulation ||
-                           correction_threshold$n_eligible == 0L) {
-      "insufficient_evidence"
-    } else if (is.finite(correction_threshold$threshold)) {
+    recovery_status <- if (correction_gate$status == "supported") {
       "appears_feasible"
+    } else if (correction_gate$status == "insufficient_evidence") {
+      "insufficient_evidence"
     } else {
       "unreliable"
     }
@@ -814,26 +729,25 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
     feasibility <- list(
       misannotation_detection = detection_status,
       identity_recovery = recovery_status,
+      correction_gate = correction_gate,
       unknown_individual_detection = unknown_status,
       warning = paste(
         "Internal estimates are exploratory: threshold selection and",
         "performance use the same out-of-fold predictions. Reference thresholds",
         "and specificity exclude confidently misassigned samples. Margin-based",
         "flagging has no probability interpretation. Detection sensitivity and",
-        "simulated specificity are cross-fitted by repeat when at least two are",
-        "available (see performance$misannotation_detection$source); the",
-        "unknown cutoff (unless unknown_threshold_method = \"mad\") is",
-        "tuned on the same simulated strangers used to estimate unknown",
+        "simulated specificity are in-sample estimates. The nearest-class",
+        "unknown cutoff is tuned on the same simulated strangers used to estimate unknown",
         "sensitivity, which makes that sensitivity optimistic. Correction",
         "cutoff selection and accuracy use the same simulated swaps, which",
         "can make the accuracy optimistic, especially with few retained rows."
       )
     )
-    # Corrections need validated identity recovery; the suspicious flag itself
-    # does not depend on feasibility.
-    reliable_correction <- recovery_status == "appears_feasible"
+    # Corrections need direct correction calibration support. The suspicious
+    # flag itself does not depend on feasibility.
+    reliable_correction <- correction_gate$status == "supported"
   } else {
-    reliable_correction <- FALSE
+    reliable_correction <- correction_gate$status == "supported"
   }
   predictions$candidate_correction <- ifelse(
       flagged & reliable_correction &
@@ -846,22 +760,20 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
   predictions$annotation_status <- ifelse(
     !is.na(predictions$candidate_correction),
            "suspicious_with_candidate_correction",
-    ifelse(flagged, "suspicious_without_reliable_alternative",
-    ifelse(!confident_prediction & predicted_id != y,
-           "no_confident_prediction",
-    ifelse(confident_prediction & predicted_id != y,
-           "weak_disagreement",
-           "no_evidence_of_incorrect_annotation"))))
+    ifelse(flagged,
+           "suspicious_without_reliable_alternative",
+           ifelse(predicted_id != y,
+                  "weak_disagreement",
+                  "no_evidence_of_incorrect_annotation")))
   result <- list(
     predictions = predictions,
     identity_scores = oof_scores,
     covariate_adjustment = if (is.null(covariate_summary)) NULL else list(
-      method = covariate_method,
+      method = "residualize",
       covariates = covariate_summary
     ),
     performance = performance,
     calibration = calibration,
-    risk_coverage = risk_coverage,
     mismatch_simulation = simulation,
     unknown_simulation = unknown_simulation,
     unknown_simulation_scores = unknown$identity_scores,
@@ -871,25 +783,16 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       fraction = length(held_out_ids) / n_samples_first_pass,
       sample_ids = held_out_ids
     ),
+    correction_gate = correction_gate,
     feasibility = feasibility,
     thresholds = list(
       annotation_margin = margin_threshold,
-      unknown_margin = if (use_distance || !detect_unknown) -Inf else
-        unknown_threshold,
-      unknown_distance = if (use_distance) unknown_threshold else Inf,
+      unknown_distance = if (detect_unknown) unknown_threshold else NA_real_,
       correction_margin = correction_threshold$threshold,
       target_specificity = target_specificity
     )
   )
   if (diagnostics) {
-    false_cells <- which(!is_observed, arr.ind = TRUE)
-    false_identity_margins <- data.frame(
-      sample_id = rownames(oof_scores)[false_cells[, 1L]],
-      alternative_id = colnames(oof_scores)[false_cells[, 2L]],
-      margin = margins$top_score[false_cells[, 1L]] -
-        oof_scores[false_cells],
-      stringsAsFactors = FALSE
-    )
     simulated_positive_margins <- if (!is.null(simulation)) {
       simulated <- simulation[simulation$actually_misannotated, ,
                               drop = FALSE]
@@ -925,21 +828,9 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
         annotation_threshold_data, simulated_positive_margins,
         simulated_negative_margins
       )
-    } else {
-      false_identity_margins$population <- "all_wrong_identity_alternatives"
-      names(false_identity_margins)[names(false_identity_margins) ==
-                                     "alternative_id"] <- "identity"
-      annotation_threshold_data <- rbind(
-        annotation_threshold_data,
-        false_identity_margins[, names(annotation_threshold_data),
-                               drop = FALSE]
-      )
     }
     annotation_threshold_data$threshold <- margin_threshold
-    annotation_threshold_data$threshold_source <- if (
-      !is.null(simulated_positive_margins) &&
-      nrow(simulated_positive_margins)
-    ) "simulated_swaps" else "all_wrong_identities"
+    annotation_threshold_data$threshold_source <- "simulated_swaps"
 
     final_diagnostics <- data.frame(
       sample_id = rownames(x),
@@ -972,23 +863,14 @@ check_annotations <- function(expr, metadata, sample_col, id_col,
       first_pass_scores = first_pass_scores,
       final_pass = final_diagnostics,
       annotation_threshold = annotation_threshold_data,
-      annotation_threshold_source = if (
-        !is.null(simulated_positive_margins) &&
-        nrow(simulated_positive_margins)
-      ) "simulated_swaps" else "all_wrong_identities",
+      annotation_threshold_source = "simulated_swaps",
       correction = list(threshold = correction_threshold$threshold,
                         min_accuracy = min_accuracy,
                         curve = correction_curve),
       unknown = list(
         enabled = detect_unknown,
         threshold = unknown_threshold,
-        statistic = if (!detect_unknown) "not_assessed" else
-          switch(unknown_threshold_method,
-                 mad = "top_margin",
-                 knn = "nearest_training_distance",
-                 global_mahalanobis = "global_mahalanobis",
-                 pca_residual = "pca_reconstruction_residual",
-                 "nearest_class_distance"),
+        statistic = if (!detect_unknown) "not_assessed" else "nearest_class_distance",
         known_values = unknown_statistic[reference],
         simulated_unknown_values = stranger_statistic,
         metrics = unknown_metrics

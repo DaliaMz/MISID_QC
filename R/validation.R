@@ -21,9 +21,7 @@
 }
 
 # Hold-out cutoff based on margins from correctly predicted samples.
-.holdout_threshold <- function(scores, correct, coverage,
-                               reference = c("all_alternatives", "top")) {
-  reference <- match.arg(reference)
+.holdout_threshold <- function(scores, correct, coverage) {
   if (!any(correct)) {
     return(Inf)
   }
@@ -31,9 +29,6 @@
   top_cell <- cbind(seq_len(nrow(scores)), max.col(scores, ties.method = "first"))
   margins <- scores[top_cell] - scores
   margins[top_cell] <- NA_real_
-  if (reference == "top") {
-    margins <- apply(margins, 1L, min, na.rm = TRUE)
-  }
   unname(stats::quantile(margins, probs = coverage, type = 1, na.rm = TRUE))
 }
 
@@ -59,7 +54,7 @@
 # the same confidently-misassigned hold-out as the real data, so agreement
 # with the pre-swap labels can be measured.
 .simulate_mismatches <- function(x, y, rate, n_folds, shrinkage,
-                                 margin_coverage, holdout_reference) {
+                                 margin_coverage) {
   y_sim <- .swap_labels(y, max(1L, round(rate * length(y) / 2)))
   if (all(y_sim == y)) {
     return(NULL)
@@ -67,8 +62,7 @@
   y_true <- y
   scores <- .simulation_oof_scores(x, y_sim, n_folds, shrinkage)
   margins <- .score_margins(scores, y_sim)
-  threshold <- .holdout_threshold(scores, margins$correct, margin_coverage,
-                                  holdout_reference)
+  threshold <- .holdout_threshold(scores, margins$correct, margin_coverage)
   held_out <- !margins$correct & margins$annotation_margin > threshold
   data.frame(
     sample_id = rownames(x),
@@ -119,6 +113,58 @@
   if (denominator == 0) NA_real_ else numerator / denominator
 }
 
+# Check whether covariates contain enough independent variation to be useful
+# fixed effects or linear covariates. Sparse categorical levels and constant
+# numeric covariates add no reliable adjustment and can make residualization
+# unstable.
+.validate_covariates <- function(covariates) {
+  covariates <- as.data.frame(covariates)
+  if (!ncol(covariates) || nrow(covariates) < 2L) {
+    stop("Covariates must provide at least two samples.")
+  }
+  for (j in seq_len(ncol(covariates))) {
+    name <- names(covariates)[j]
+    value <- covariates[[j]]
+    if (is.numeric(value)) {
+      if (any(!is.finite(value))) {
+        stop("Numeric covariates must contain only finite values.")
+      }
+      if (length(unique(value)) < 2L) {
+        stop(sprintf("Numeric covariate '%s' is constant and cannot be residualized.", name))
+      }
+      if (length(unique(value)) < 5L) {
+        warning(sprintf(
+          "Numeric covariate '%s' has few distinct values; it may behave like a categorical covariate.",
+          name
+        ), call. = FALSE)
+      }
+    } else {
+      if (anyNA(value) || any(!nzchar(as.character(value)))) {
+        stop("Covariates must contain no missing or empty values.")
+      }
+      counts <- table(as.character(value))
+      if (length(counts) < 2L) {
+        stop(sprintf("Categorical covariate '%s' has only one level.", name))
+      }
+      if (length(counts) >= nrow(covariates) - 1L) {
+        stop(sprintf(
+          "Categorical covariate '%s' has too many levels for the number of samples.",
+          name
+        ))
+      }
+      sparse <- counts[counts <= 2L]
+      if (length(sparse)) {
+        warning(sprintf(
+          "Categorical covariate '%s' has sparse level(s) represented by two or fewer samples: %s.",
+          name,
+          paste(sprintf("%s (n=%d)", names(sparse), sparse), collapse = ", ")
+        ), call. = FALSE)
+      }
+    }
+  }
+  invisible(TRUE)
+}
+
 # Residualize sample-by-feature expression against fixed-effect covariates.
 # Covariates are removed without using individual identities, swaps, or
 # unknown-sample labels. Character, logical, and factor columns become fixed
@@ -128,6 +174,7 @@
   if (!ncol(covariates) || nrow(covariates) != nrow(x)) {
     stop("Covariates must provide one row per sample.")
   }
+  .validate_covariates(covariates)
   covariate_frame <- covariates
   for (j in seq_len(ncol(covariates))) {
     value <- covariates[[j]]
@@ -171,7 +218,7 @@
     specificity = specificity, source = source,
     prevalence = NA_real_, scenarios = NULL
   )
-  if (!source %in% c("simulated_swaps_cross_fitted", "simulated_swaps_in_sample") ||
+  if (!identical(source, "simulated_swaps_in_sample") ||
       length(sensitivity) != 1L || length(specificity) != 1L ||
       !is.finite(sensitivity) || !is.finite(specificity)) {
     result$reason <- "Simulated swap sensitivity and specificity are unavailable."
@@ -322,49 +369,6 @@
   candidates[best][ceiling(length(best) / 2)]
 }
 
-# Evaluate swaps and unchanged samples using cutoffs chosen from other repeats'
-# simulated samples and the real reference margins.
-.crossfit_swap_detection <- function(negatives, simulation,
-                                     target_specificity) {
-  swaps <- simulation[simulation$actually_misannotated &
-                        is.finite(simulation$annotation_margin), ,
-                      drop = FALSE]
-  by_repeat <- split(swaps$annotation_margin, swaps$repeat_id)
-  by_repeat <- by_repeat[lengths(by_repeat) > 0L]
-  if (length(by_repeat) < 2L) {
-    return(NULL)
-  }
-  unchanged <- simulation[!simulation$actually_misannotated &
-                            is.finite(simulation$annotation_margin), , drop = FALSE]
-  if (!nrow(unchanged) ||
-      any(vapply(names(by_repeat), function(r) {
-        !any(unchanged$repeat_id != r)
-      }, logical(1)))) {
-    return(NULL)
-  }
-  per_repeat <- lapply(names(by_repeat), function(r) {
-    threshold <- .select_threshold(
-      negatives, unlist(by_repeat[names(by_repeat) != r], use.names = FALSE),
-      target_specificity, "upper",
-      additional_negatives = unchanged$annotation_margin[unchanged$repeat_id != r]
-    )
-    held_unchanged <- unchanged$annotation_margin[unchanged$repeat_id == r]
-    c(sensitivity = mean(by_repeat[[r]] > threshold),
-      n_unchanged = length(held_unchanged),
-      n_correct = sum(held_unchanged <= threshold))
-  })
-  per_repeat <- do.call(rbind, per_repeat)
-  sizes <- lengths(by_repeat)
-  list(
-    sensitivity = sum(per_repeat[, "sensitivity"] * sizes) / sum(sizes),
-    sensitivity_sd = stats::sd(per_repeat[, "sensitivity"]),
-    simulated_specificity = .safe_divide(sum(per_repeat[, "n_correct"]),
-                                         sum(per_repeat[, "n_unchanged"])),
-    n_simulated_negatives = sum(per_repeat[, "n_unchanged"]),
-    n_repeats = nrow(per_repeat)
-  )
-}
-
 # Top margins and nearest-class distances of simulated strangers. For each held-out individual only up to
 # `n_strays` of their samples (never all of them) stay in the data, relabelled
 # as random other enrolled individuals, as a stranger's samples would be in a
@@ -379,9 +383,7 @@
     if (isTRUE(progress)) {
       message("Skipping held-out-individual validation: at least three individuals are needed.")
     }
-    return(list(n = 0L, top_margin = numeric(), distance = numeric(),
-                global_mahalanobis = numeric(), pca_residual = numeric(),
-                knn = numeric(),
+    return(list(n = 0L, distance = numeric(),
                 status = "insufficient_evidence"))
   }
   n_groups <- if (is.null(n_folds)) {
@@ -399,11 +401,7 @@
     message(sprintf("Validating held-out individuals in %d groups across %d individuals.",
                     n_groups, length(classes)))
   }
-  unknown_margin <- numeric()
   unknown_distance <- numeric()
-  unknown_global_mahalanobis <- numeric()
-  unknown_pca_residual <- numeric()
-  unknown_knn <- numeric()
   records <- list()
   score_rows <- list()
   progress_interval <- max(1L, ceiling(n_groups / 10L))
@@ -432,25 +430,9 @@
         )
         scores <- predict_shrinkage_lda(model, x[scored, , drop = FALSE])
         margins <- .score_margins(scores, wrong[half == h])
-        distances <- .nearest_class_distance(model, x[scored, , drop = FALSE])
-        global_mahalanobis <- .global_mahalanobis_distance(
-          model, x[scored, , drop = FALSE]
-        )
-        pca_residual <- .pca_reconstruction_residual(
-          model, x[scored, , drop = FALSE]
-        )
-        knn_distance <- .nearest_training_distance(
-          model, x[scored, , drop = FALSE]
-        )
-        unknown_margin <- c(
-          unknown_margin, margins$top_margin
-        )
+        distances <- .nearest_class_distance(model, x[scored, , drop = FALSE],
+                                              scores)
         unknown_distance <- c(unknown_distance, distances)
-        unknown_global_mahalanobis <- c(
-          unknown_global_mahalanobis, global_mahalanobis
-        )
-        unknown_pca_residual <- c(unknown_pca_residual, pca_residual)
-        unknown_knn <- c(unknown_knn, knn_distance)
         records[[length(records) + 1L]] <- data.frame(
           sample_id = rownames(x)[scored],
           original_id = y[scored],
@@ -461,9 +443,6 @@
           annotation_margin = margins$annotation_margin,
           top_margin = margins$top_margin,
           nearest_class_distance = distances,
-          global_mahalanobis = global_mahalanobis,
-          pca_reconstruction_residual = pca_residual,
-          nearest_training_distance = knn_distance,
           holdout_group = g,
           scoring_fold = h,
           stringsAsFactors = FALSE
@@ -482,23 +461,11 @@
                       g, n_groups))
     }
   }
-  list(n = length(unknown_margin), top_margin = unknown_margin,
-       distance = unknown_distance,
-       global_mahalanobis = unknown_global_mahalanobis,
-       pca_residual = unknown_pca_residual,
-       knn = unknown_knn,
+  list(n = length(unknown_distance), distance = unknown_distance,
        records = if (length(records)) do.call(rbind, records) else NULL,
        identity_scores = if (length(score_rows)) do.call(rbind, score_rows) else NULL,
-       status = if (length(unknown_margin)) "estimated" else
+       status = if (length(unknown_distance)) "estimated" else
          "insufficient_evidence")
-}
-
-# Robust lower cutoff on the log top margin of enrolled samples. It uses no
-# unknown samples and no single extreme sample, and a clean cohort flags
-# almost nothing.
-.unknown_margin_threshold <- function(known_margin, mad_multiplier) {
-  log_margin <- log(pmax(known_margin, .Machine$double.eps))
-  exp(stats::median(log_margin) - mad_multiplier * stats::mad(log_margin))
 }
 
 # Out-of-fold scores for a simulated label set; NULL means leave-one-out.
@@ -529,7 +496,9 @@
 
 .correction_threshold <- function(simulation, min_accuracy) {
   empty <- list(threshold = Inf, n_eligible = 0L, n_retained = 0L,
-                coverage = NA_real_, accuracy = NA_real_)
+                coverage = NA_real_, accuracy = NA_real_,
+                repeat_accuracy = numeric(),
+                repeat_accuracy_range = c(NA_real_, NA_real_))
   if (is.null(simulation)) return(empty)
   eligible <- simulation$actually_misannotated |
     !simulation$agreement_simulated
@@ -542,9 +511,85 @@
   passing <- which(curve$agreement >= min_accuracy)
   if (!length(passing)) return(empty)
   chosen <- passing[which.min(curve$threshold[passing])]
-  list(threshold = curve$threshold[chosen], n_eligible = nrow(selected),
+  threshold <- curve$threshold[chosen]
+  retained <- selected$top_margin >= threshold
+  repeat_accuracy <- if ("repeat_id" %in% names(selected)) {
+    repeat_ids <- selected$repeat_id[retained]
+    retained_rows <- selected[retained, , drop = FALSE]
+    vapply(
+      split(retained_rows, repeat_ids),
+      function(rows) mean(rows$agreement_real),
+      numeric(1)
+    )
+  } else numeric()
+  repeat_accuracy_range <- if (length(repeat_accuracy)) {
+    c(min(repeat_accuracy), max(repeat_accuracy))
+  } else c(NA_real_, NA_real_)
+  list(threshold = threshold, n_eligible = nrow(selected),
        n_retained = curve$n_retained[chosen], coverage = curve$coverage[chosen],
-       accuracy = curve$agreement[chosen])
+       accuracy = curve$agreement[chosen],
+       repeat_accuracy = repeat_accuracy,
+       repeat_accuracy_range = repeat_accuracy_range)
+}
+
+.correction_gate <- function(simulation, correction, n_input,
+                             min_accuracy, min_correction_samples,
+                             repeat_tolerance) {
+  result <- list(
+    status = "insufficient_evidence",
+    reason = "No usable correction calibration.",
+    threshold = correction$threshold,
+    n_input = n_input,
+    n_input_required = 20L,
+    n_eligible = correction$n_eligible,
+    n_retained = correction$n_retained,
+    n_retained_required = min_correction_samples,
+    coverage = correction$coverage,
+    accuracy = correction$accuracy,
+    target_accuracy = min_accuracy,
+    repeat_accuracy = correction$repeat_accuracy,
+    repeat_accuracy_range = correction$repeat_accuracy_range,
+    repeat_tolerance = repeat_tolerance
+  )
+  if (is.null(simulation) || !is.finite(correction$threshold) ||
+      correction$n_eligible < 1L) {
+    return(result)
+  }
+  if (n_input < 20L) {
+    result$reason <- "Fewer than 20 input samples are available."
+    return(result)
+  }
+  if (correction$n_retained < min_correction_samples) {
+    result$reason <- sprintf(
+      "Fewer than %d simulated rows remain at the correction threshold.",
+      min_correction_samples
+    )
+    return(result)
+  }
+  if (!is.finite(correction$accuracy) ||
+      correction$accuracy < min_accuracy) {
+    result$status <- "unreliable"
+    result$reason <- "Retained correction accuracy misses the target."
+    return(result)
+  }
+  repeat_lower <- if (length(correction$repeat_accuracy)) {
+    min(correction$repeat_accuracy)
+  } else NA_real_
+  if (!is.finite(repeat_lower)) {
+    result$reason <- "Correction accuracy is unavailable by simulation repeat."
+    return(result)
+  }
+  if (repeat_lower < min_accuracy - repeat_tolerance) {
+    result$status <- "unreliable"
+    result$reason <- sprintf(
+      "The lowest repeat accuracy is more than %.1f percentage points below target.",
+      100 * repeat_tolerance
+    )
+    return(result)
+  }
+  result$status <- "supported"
+  result$reason <- "Correction calibration meets the sample, row, accuracy, and repeat gates."
+  result
 }
 
 .confident_prediction <- function(predicted, observed, margin, cutoff) {

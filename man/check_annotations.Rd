@@ -6,184 +6,44 @@ check_annotations(expr, metadata, sample_col, id_col, shrinkage = 0.1,
   target_specificity = 0.95, assess_feasibility = TRUE,
   progress = interactive(), cv_folds = NULL,
   min_agreement = 0.6, margin_coverage = 0.025,
-  holdout_reference = c("all_alternatives", "top"),
   mismatch_rate = 0.1, min_accuracy = 0.9, detect_unknown = TRUE,
-  unknown_threshold_method = c("simulated", "mad", "knn",
-                               "global_mahalanobis", "pca_residual"),
-  unknown_mad = 3,
-  grouped_unknown_validation = FALSE,
-  unknown_stray_samples = 2L, mismatch_repeats = 3L,
-  covariate_col = NULL, covariate_method = c("residualize"),
+  grouped_unknown_validation = FALSE, unknown_stray_samples = 2L,
+  mismatch_repeats = 3L, covariate_col = NULL,
+  min_correction_samples = 20L, correction_repeat_tolerance = 0.05,
   diagnostics = FALSE)
 }
 \arguments{
-\item{expr}{Numeric expression matrix, features by samples, with unique
-sample names in \code{colnames(expr)}.}
+\item{expr}{Numeric expression matrix, features by samples, with unique sample names in \code{colnames(expr)}.}
 \item{metadata}{Data frame containing sample and observed identity columns.}
 \item{sample_col}{Name of the sample identifier column.}
 \item{id_col}{Name of the observed individual identifier column.}
 \item{shrinkage}{Shrinkage fraction for the diagonal covariance target.}
-\item{target_specificity}{Minimum specificity for each of the reference and
-unchanged simulated samples when selecting the annotation threshold. Also used
-for the simulated unknown-individual cutoff.}
-\item{assess_feasibility}{Whether to return task-specific feasibility
-assessments based on internal validation.}
-\item{progress}{Whether to report progress updates. Defaults to \code{TRUE}
-in interactive sessions and \code{FALSE} otherwise.}
-\item{cv_folds}{\code{NULL} (default) uses leave-one-sample-out validation;
-otherwise, an integer from 2 to the smallest individual sample count selects
-the number of stratified cross-validation folds. Fold assignment is
-randomized; call \code{set.seed()} beforehand for reproducible results.}
-\item{min_agreement}{Minimum fraction of samples whose out-of-fold top
-predicted identity equals the observed identity. If agreement is below this
-value, the function stops before calibration. Defaults to 0.6; a warning is
-issued when agreement is below 0.75.}
-\item{margin_coverage}{Quantile used to set the first-pass holdout cutoff.
-The reference values are chosen by \code{holdout_reference}.}
-\item{holdout_reference}{Whether to use the top-versus-second margin
-(\code{"top"}) or pool the top-versus-each-alternative margins
-(\code{"all_alternatives"}) from correctly predicted samples. Samples
-predicted incorrectly with an annotation margin (top versus observed score)
-above this threshold are treated as confidently misassigned and excluded from
-the threshold reference set. The same choice is applied to simulated mismatches.
-The original out-of-fold models are not refit after holdout.}
-\item{mismatch_rate}{Fraction of reference samples whose labels are swapped
-pairwise. \code{"held_out"} uses the fraction of all input samples held out in
-the first pass, applied to the simulation reference samples. Swaps are rounded
-to whole pairs, with at least one pair for \code{"held_out"}, even when no
-samples were held out. The actual simulated fraction may differ.
-\code{NULL} or numeric 0 disables the simulation.}
-\item{mismatch_repeats}{Number of independent label-swap simulations whose results
-are pooled to tune the annotation cutoff. With at least two repeats, detection
-sensitivity and simulated specificity are cross-fitted: each repeat is scored
-with a cutoff tuned on the other repeats' swapped and unchanged samples and the
-reference negatives. More repeats give a less extreme cutoff and a steadier
-sensitivity estimate at the cost of roughly proportional simulation time. With 1,
-sensitivity is in-sample.}
-\item{covariate_col}{Optional metadata column name, or character vector of
-names, used to residualize expression before individual modelling. Categorical
-covariates are fitted as fixed effects and numeric covariates as linear effects.
-Covariates are removed without using individual identities or mislabel/unknown
-truth, and missing covariate values are rejected.}
-\item{covariate_method}{Fixed-effect covariate modelling method. Currently only
-\code{"residualize"} is supported.}
-\item{diagnostics}{Whether to include intermediate gate data in the result.
-This is intended for understanding and plotting the validation steps; it can
-add substantially to the result size.}
-\item{min_accuracy}{Target agreement for selecting the correction cutoff on
-simulated swaps and unchanged samples predicted differently from their
-simulated label. Agreeing predictions are returned in \code{predicted_id_clean};
-disagreements are returned only at or above the correction cutoff. Without a
-usable cutoff, disagreements have \code{predicted_id_clean = NA}.
-\code{predicted_id} always retains the raw prediction.}
-\item{detect_unknown}{If \code{FALSE}, unknown-individual detection is switched
-off: no stranger validation is run, no sample is marked as a potential
-unknown individual.
-\code{feasibility$unknown_individual_detection} is \code{"not_assessed"}.}
-
-\item{unknown_threshold_method}{How the unknown-individual cutoff is chosen.
-\code{"simulated"} (default) uses the nearest-class Mahalanobis distance.
-\code{"mad"} restores the robust top-margin rule. \code{"knn"} uses distance to
-nearby in-class training residuals, \code{"global_mahalanobis"} uses distance
-from the pooled cohort center, and \code{"pca_residual"} uses reconstruction
-residual outside leading pooled within-class principal components.
-Non-MAD methods use target-specificity quantiles and simulated stranger scores
-to select an upper cutoff. Samples beyond the cutoff are marked as potential
-unknown individuals and cannot receive candidate corrections; the
-flag does not hide \code{predicted_id_clean}. No share
-of samples is forced to be unknown.}
-\item{unknown_mad}{Multiplier used only when
-\code{unknown_threshold_method = "mad"}.}
-\item{unknown_stray_samples}{Unknown-individual validation pretends each enrolled
-individual is a stranger. Up to this many of their samples (never all of them)
-are kept in the data relabelled as random other individuals, as a stranger's
-samples would be in a real cohort, and the rest are dropped. Each kept sample
-is scored by a model that never saw it, giving a margin for an unknown person.}
-\item{grouped_unknown_validation}{By default the stranger simulation is repeated
-for each individual separately. If \code{TRUE} and \code{cv_folds} is set, individuals are
-processed in \code{cv_folds} groups instead, so far fewer models are fit, at the cost
-of slightly optimistic (too large) unknown margins. It only affects the
-reported unknown sensitivity and feasibility. With the default \code{unknown_threshold_method = "simulated"} it also affects the unknown cutoff.}
+\item{target_specificity}{Minimum specificity for reference and unchanged simulated samples.}
+\item{assess_feasibility}{Whether to return task-specific feasibility assessments.}
+\item{progress}{Whether to report progress updates.}
+\item{cv_folds}{Leave-one-sample-out when \code{NULL}, otherwise a stratified fold count.}
+\item{min_agreement}{Minimum out-of-fold agreement required before calibration.}
+\item{margin_coverage}{Quantile used for the first-pass holdout cutoff. The reference pools top-minus-alternative margins.}
+\item{mismatch_rate}{Positive numeric swap fraction or \code{"held_out"} to use the first-pass held-out fraction.}
+\item{min_accuracy}{Target agreement for selecting the correction cutoff.}
+\item{min_correction_samples}{Minimum eligible simulated rows retained at the correction cutoff before candidate corrections are enabled.}
+\item{correction_repeat_tolerance}{Maximum permitted shortfall of the lowest repeat-level correction accuracy below \code{min_accuracy}.}
+\item{detect_unknown}{Whether to run nearest-class unknown-individual validation.}
+\item{grouped_unknown_validation}{Whether held-out individuals are processed in groups instead of individually.}
+\item{unknown_stray_samples}{Maximum number of samples retained per simulated unknown individual.}
+\item{mismatch_repeats}{Number of independent pairwise-swap simulation repeats.}
+\item{covariate_col}{Optional metadata covariate column or columns to residualize.}
+\item{diagnostics}{Whether to retain intermediate gate and threshold data.}
 }
 \value{
-A list with sample-level \code{predictions}, raw \code{identity_scores},
-\code{performance}, \code{calibration}, \code{covariate_adjustment},
-\code{risk_coverage},
-\code{mismatch_simulation}, \code{unknown_simulation},
-\code{unknown_simulation_scores}, \code{held_out} (count, fraction and IDs of samples held
-out as confidently misassigned, from the first pass), \code{feasibility}, and
-\code{thresholds} components. \code{predictions$potential_unknown_individual} is a
-separate flag, not an \code{annotation_status} value. Predictions also include
-the nearest-class distance and the unknown-detection score and threshold.
-\code{predictions$annotation_status} is descriptive (flag, confidence,
-agreement) and does not depend on \code{feasibility}.
-All samples, including held-out samples, are flagged as suspicious only when
-their annotation margin exceeds the calibrated threshold. Every input sample has a row.
-\code{unknown_simulation} contains one row per held-out-individual sample,
-including its original and simulated labels, prediction, margins, distance,
-holdout group, scoring fold and unknown flag. \code{unknown_simulation_scores}
-contains the corresponding raw LDA scores, in the same row order; held-out
-classes have \code{NA} scores. Both are \code{NULL} when detection is disabled or
-no unknown samples are simulated. Scores come from different fitted
-models and should be compared between classes within a sample.
-\code{performance$misannotation_detection} includes simulated-swap sensitivity,
-\code{simulated_specificity} on unchanged simulation samples and
-\code{specificity} on the original reference samples. The detection verdict
-uses simulated sensitivity and simulated specificity; without simulated
-specificity it is \code{"insufficient_evidence"}. With one repeat both rates
-are in-sample. The verdict is \code{"appears_feasible"} when sensitivity
-reaches 80\% and specificity reaches \code{target_specificity},
-\code{"unreliable"} when either falls more than 10 percentage points short,
-and \code{"below_target"} for smaller shortfalls. These verdicts do not change
-sample flags or candidate corrections. Precision, accuracy and ranking metrics in that table use the
-reference negatives and final cutoff.
-\code{performance$estimated_detection_errors} estimates misannotation prevalence
-from the observed suspicious-flag fraction and simulated swap sensitivity and
-specificity, then projects false positives and missed misannotations at that
-estimate and at +/- 2.5 percentage points, bounded to 0--100\%. The projections
-are not confidence intervals or sample-level probabilities. They are unavailable
-when the simulated rates are missing, uninformative or incompatible with the
-observed flag rate. Swap simulations may not represent real errors or unknown
-individuals; nearly uninformative rates can yield unstable estimates. The
-alternative prevalence assumptions need not reproduce the observed flag count.
-Set \code{progress = TRUE} to display the summary.
-\code{performance$all_alternatives_detection} keeps the
-every-wrong-label diagnostic, and \code{performance$recovery_accuracy_misannotated}
-and \code{performance$correction_validation} report recovery on simulated
-misannotated samples and the precision and recall of proposed corrections.
-The correction cutoff is the lowest top margin reaching \code{min_accuracy} on
-the filtered simulations. It includes swapped samples even when predicted as
-their simulated label, so this accuracy is not correction precision.
-\code{calibration$correction_margin} reports the threshold, retained count, coverage and
-in-sample accuracy. Recovery appears feasible if the cutoff exists and there are
-at least 20 input samples; without swaps it is insufficient evidence. Candidates
-must also pass the unknown and suspicious gates. Simulated correction validation
-applies the margin-based unknown gate for \code{"mad"}, but not the default
-distance-based unknown gate because simulated swap distances are not recorded;
-it also does not apply feasibility. There is
-no minimum retained simulated count, so even one correct row can meet the
-target. Simulation rows can be dependent and in-sample cutoff selection can
-make the accuracy optimistic. If
-\code{diagnostics = TRUE}, the result also
-contains first-pass and final-pass sample margins, threshold populations,
-correction-curve data, and gate inputs under \code{diagnostics}.
+A list containing sample predictions, raw identity scores, performance,
+calibration, covariate adjustment, mismatch simulation, unknown-individual
+simulation, correction gate, held-out sample information, feasibility, thresholds, and
+optional diagnostics.
 }
 \description{
-Uses leave-one-sample-out shrinkage linear discriminant scores and internal
-artificial-label and held-out-individual experiments to describe dataset-
-specific annotation evidence.
-}
-\details{
-The expression matrix must contain transformed, finite values with features
-in rows and samples in columns. Each enrolled individual needs at least two
-samples. This implementation uses all supplied features and does not normalize
-or select features. The evaluated sample is excluded from its own fitted
-reference.
-
-Evidence is expressed as raw score margins (top versus second, and top versus
-observed label), not probabilities. The probability that an observed annotation
-is correct is not reported
-because simulated error prevalence does not identify real-data error
-prevalence. Internal thresholds and performance are estimated from the same
-out-of-fold predictions and should be treated as exploratory.
+Uses leave-one-sample-out or stratified cross-validation shrinkage LDA
+scores and compulsory pairwise-swap simulations to describe dataset-specific
+annotation quality. Unknown individuals are evaluated with nearest-class
+Mahalanobis distance only.
 }

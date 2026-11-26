@@ -23,7 +23,6 @@ results$predictions
 results$identity_scores
 results$performance
 results$feasibility
-plot_risk_coverage(results)
 ```
 
 The initial implementation uses leave-one-sample-out shrinkage LDA and raw
@@ -36,9 +35,8 @@ misassigned samples are held out of the calibration reference set, but the
 models are not refit. A sample is confidently misassigned when its prediction
 disagrees with its label and its annotation margin (top versus observed label)
 exceeds the `margin_coverage` quantile (default 0.025) of reference margins
-from correctly predicted samples. `holdout_reference = "all_alternatives"`
-(default) pools top-minus-each-alternative margins; `"top"` uses only
-top-minus-second margins. The label-swap simulation applies the same rule.
+from correctly predicted samples. The holdout reference pools
+top-minus-each-alternative margins. The label-swap simulation applies the same rule.
 Set `mismatch_rate = "held_out"` to use the first-pass held-out fraction as
 the swap rate instead of the default 0.1. This is not an estimate of the true
 error rate. Swaps are made in whole pairs, with at least one pair even when
@@ -47,8 +45,8 @@ as `calibration$mismatch_simulation$actual_rate`.
 The former `refit_clean` argument has been removed; omit it from existing calls.
 For compatibility, `calibration$dropped_individuals` is empty and
 `predictions$excluded_from_refit` is always `FALSE`.
-Flagging uses a margin threshold, and a label-swap simulation
-supplies known-truth agreement for `plot_risk_coverage()`. Margins
+Flagging uses a margin threshold and a compulsory label-swap simulation.
+Margins
 are **not** annotation-correctness probabilities: no absolute probability
 that a sample is correctly annotated is reported because the true error
 prevalence is unknown. Internal artificial relabeling and leave-one-individual-
@@ -61,20 +59,17 @@ classes have `NA` scores. Both are `NULL` when unknown detection is disabled
 or no held-out-individual samples can be simulated. The scores come from
 different models and are intended for class comparisons within each sample.
 Relabeling metrics: detection sensitivity comes from the simulated pairwise
-swaps and, with `mismatch_repeats >= 2`, is cross-fitted (each repeat is
-scored with a cutoff tuned on simulated positives and unchanged samples from the
-other repeats, plus the reference negatives; see
-`performance$misannotation_detection$source`).
+swaps. The result reports in-sample simulated sensitivity and specificity.
 The final cutoff maximizes simulated-swap sensitivity while independently
 requiring both reference and unchanged simulated specificity to meet
-`target_specificity`. If simulations are unavailable, it falls back to
-calibration against the reference and all wrong-label alternatives.
+`target_specificity`. Swap simulation is required and no all-wrong-label
+fallback threshold is used.
 The detection verdict uses simulated sensitivity (target 80%) and specificity
 (target `target_specificity`). It is `appears_feasible` when both meet their
 targets, `unreliable` when either misses by more than 10 percentage points, and
 `below_target` for smaller shortfalls (including exactly 10 points). The rates
-are cross-fitted by repeat when possible, and in-sample with one repeat; without
-simulated positives or unchanged samples the verdict is insufficient evidence.
+are in-sample; without simulated positives or unchanged samples the verdict is
+insufficient evidence.
 This verdict does not change sample flags or candidate corrections.
 `performance$misannotation_detection$simulated_specificity` is the verdict
 estimate, while `specificity` is the original reference specificity.
@@ -88,15 +83,11 @@ guaranteed counts; the alternative assumptions need not reproduce the observed
 flag count. Estimates are unavailable when simulated rates are missing, do not
 distinguish errors, or imply a prevalence outside 0--100%. When sensitivity
 and specificity barely distinguish errors, the estimate can be highly unstable.
-Cross-fitted rates use cutoffs from other repeats, which can differ from the
-final cutoff used for the observed flags; a single repeat uses in-sample rates.
 Swaps may not represent real misannotations, especially unknown individuals.
 The report includes the estimates; `progress = TRUE` also displays them.
-The report's cutoff curves show in-sample rates; cross-fitted specificity
-can be below the target even when the calibration rates meet it.
-The every-wrong-label and
-all-pairs swap metrics are kept as diagnostics
-(`performance$all_alternatives_detection`, `performance$pairwise_swap_detection`);
+The report's cutoff curves show in-sample rates.
+The pairwise swap metrics are kept as diagnostics
+(`performance$pairwise_swap_detection`);
 precision reflects those artificial scenarios, not a population error
 prevalence. Recovery on simulated misannotated samples and the precision and
 recall of proposed corrections are in `performance$recovery_accuracy_misannotated`
@@ -112,19 +103,23 @@ For correction calibration, simulations include swapped samples plus unchanged
 samples predicted as a different identity. The lowest top-margin cutoff reaching
 `min_accuracy` (default 90%) on that filtered set is recorded in
 `thresholds$correction_margin`; the retained count, coverage and in-sample accuracy are in
-`calibration$correction_margin`. Swaps predicted as their simulated label are
-included, so this accuracy is not the precision of proposed corrections.
-Recovery appears feasible if such a cutoff exists and there are at least 20
-input samples; without swaps it is insufficient evidence. `predicted_id_clean`
+`calibration$correction_margin`, together with repeat-level accuracy. Swaps predicted
+as their simulated label are included, so this accuracy is not the precision of
+proposed corrections. Candidate corrections are enabled only by
+`correction_gate`: at least 20 input samples, at least
+`min_correction_samples` (default 20) eligible simulated rows retained at the
+cutoff, pooled accuracy at least `min_accuracy`, and every repeat accuracy no
+more than `correction_repeat_tolerance` (default 5 percentage points) below the
+target. The gate result records the threshold, counts, coverage, accuracy,
+repeat range, and reason. `predicted_id_clean`
 returns agreeing predictions and disagreements at or above the correction cutoff,
 even for unknown-flagged samples. Candidate corrections additionally require a
 suspicious flag and must not be flagged as unknown. Without a usable cutoff,
 disagreements have no clean prediction. The former general abstention threshold
 and its outputs have been removed. Simulated correction validation does not
-apply the default distance-based unknown gate or the feasibility verdict, so it
-does not exactly reproduce final candidates. There is no
-minimum retained simulation count: even one correct simulated row can meet the
-target. The cutoff and accuracy use the same simulations, whose rows may be
+apply the default distance-based unknown gate or the correction gate, so it
+does not exactly reproduce final candidates. The correction gate requires enough
+retained rows, but the cutoff and accuracy use the same simulations, whose rows may be
 dependent, so the estimate can be optimistic.
 
 To inspect the individual stages and plot the margins and cutoffs, load the

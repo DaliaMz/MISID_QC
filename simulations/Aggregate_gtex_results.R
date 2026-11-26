@@ -140,8 +140,9 @@ low_agreement_summary <- report_data[
 annotation_status_levels <- c(
   "insufficient_evidence", "potential_unknown_individual",
   "suspicious_with_candidate_correction",
-  "suspicious_without_reliable_alternative", "no_confident_prediction",
-  "weak_disagreement", "no_evidence_of_incorrect_annotation"
+  "suspicious_without_reliable_alternative",
+  "weak_disagreement",
+  "no_evidence_of_incorrect_annotation"
 )
 annotation_status_columns <- intersect(
   paste0("n_", annotation_status_levels), names(report_data)

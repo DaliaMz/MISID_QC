@@ -81,14 +81,8 @@ absent class or disabled detection gives `NA` for the corresponding rate.
 The existing misannotation and recovery metrics still group unknowns together
 with enrolled-label swaps.
 
-The synthetic runner also accepts
-`unknown_threshold_method=simulated,mad,knn,global_mahalanobis,pca_residual`.
-`simulated` is the existing nearest-class Mahalanobis rule,
-`mad` is the robust top-margin rule, `knn` compares against nearby training
-residuals, `global_mahalanobis` uses distance from the pooled cohort center,
-and `pca_residual` measures reconstruction residual outside leading pooled
-within-class principal components. Method choices are included in synthetic
-config names only when detection is enabled.
+Unknown-individual detection uses the nearest-class Mahalanobis distance and
+the simulated-stranger threshold.
 
 `Simulate_full_dataset.R` also exposes categorical tissue and numeric time
 covariates. Default runs create `tissue` metadata with no tissue variance; set
@@ -121,8 +115,8 @@ Regenerate the scenario files and use a new runner output directory (or
 
 The runners no longer accept `refit_clean`: the annotation models are not
 refit, and suspicious calls use the calibrated annotation-margin cutoff even
-for held-out samples. The detection verdict now uses simulated specificity,
-cross-fitted by repeat when possible, rather than reference specificity.
+for held-out samples. The detection verdict now uses in-sample simulated sensitivity and specificity
+rather than reference specificity.
 Cutoff calibration now separately constrains specificity on reference and
 unchanged simulated samples. New configuration names end in `_dualcal_simspec` to avoid
 skipping older runs. Use a new output directory when comparing results, or
@@ -162,12 +156,8 @@ Both runners also accept `detect_unknown=TRUE,FALSE` to run each scenario in
 both detection modes; the default is `FALSE`. For PBS, submit with
 `RUN_ARGS='cv_folds=5 detect_unknown=TRUE,FALSE' qsub simulations/run_sims.pbs`
 or use `run_gtex.pbs` for the GTEx benchmark.
-The holdout reference can also be compared with
-`holdout_reference=all_alternatives,top`: the default pools margins to every
-alternative identity, while `top` uses only the top-versus-second margin.
-Both runners use the same selected rule for observed and simulated samples, and
-include non-default choices in the config name so their output files do not
-collide.
+Both runners pool top-minus-each-alternative margins for the observed and
+simulated holdout reference.
 
 Both runners also accept `mismatch_rate=held_out` or a comma-separated
 comparison such as `mismatch_rate=0.1,held_out`. The held-out fraction is
@@ -219,7 +209,7 @@ remains `"random"` and preserves existing scenario numbering. The numbering and 
 grid, so scenarios shared with earlier runs keep their numbers and seeds. Set
 `keep_sets`, `keep_rates` or `keep_individual_n` before sourcing to change the
 subset. The runners default to 5-fold CV and
-`mismatch_repeats=3`, so detection sensitivity is cross-fitted, and to
+`mismatch_repeats=3`, so detection sensitivity is in-sample, and to
 `min_agreement=0` (agreement gate off). `first_pass_agreement` is recorded per
 scenario; apply any cutoff to it afterwards. This now also allows agreement
 below 60%, which previously stopped even when the runner set the gate to zero.

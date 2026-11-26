@@ -104,38 +104,29 @@ set.seed(42)
 result <- suppressWarnings(synthetic$check_annotations(
   t(generated$X), as.data.frame(generated$meta), "sample", "label_observed",
   progress = FALSE, min_agreement = 0,
-  mismatch_rate = 0, detect_unknown = TRUE
+  mismatch_rate = 0.1, detect_unknown = TRUE
 ))
 stopifnot(nrow(result$predictions) == nrow(generated$meta),
           !is.null(result$performance$unknown_individual_detection))
-for (unknown_method in c("mad", "knn", "global_mahalanobis", "pca_residual")) {
-  set.seed(42)
-  candidate <- synthetic$check_annotations(
-    t(generated$X), as.data.frame(generated$meta), "sample", "label_observed",
-    progress = FALSE, min_agreement = 0, mismatch_rate = 0,
-    detect_unknown = TRUE, unknown_threshold_method = unknown_method,
-    diagnostics = TRUE
-  )
-  statistic <- candidate$diagnostics$unknown$statistic
-  expected <- switch(unknown_method,
-    mad = "top_margin",
-    knn = "nearest_training_distance",
-    global_mahalanobis = "global_mahalanobis",
-    pca_residual = "pca_reconstruction_residual"
-  )
-  stopifnot(nrow(candidate$predictions) == nrow(generated$meta),
-            identical(statistic, expected),
-            all(is.finite(candidate$predictions$unknown_detection_score)),
-            length(candidate$diagnostics$unknown$known_values) > 0L,
-            length(candidate$diagnostics$unknown$simulated_unknown_values) > 0L)
-}
+set.seed(42)
+candidate <- synthetic$check_annotations(
+  t(generated$X), as.data.frame(generated$meta), "sample", "label_observed",
+  progress = FALSE, min_agreement = 0, mismatch_rate = 0.1,
+  detect_unknown = TRUE, diagnostics = TRUE
+)
+stopifnot(nrow(candidate$predictions) == nrow(generated$meta),
+          identical(candidate$diagnostics$unknown$statistic,
+                    "nearest_class_distance"),
+          all(is.finite(candidate$predictions$unknown_detection_score)),
+          length(candidate$diagnostics$unknown$known_values) > 0L,
+          length(candidate$diagnostics$unknown$simulated_unknown_values) > 0L)
 covariate_meta <- as.data.frame(generated$meta)
 covariate_meta$tissue <- rep(c("tissue_a", "tissue_b"),
                              length.out = nrow(covariate_meta))
 set.seed(42)
 covariate_result <- synthetic$check_annotations(
   t(generated$X), covariate_meta, "sample", "label_observed",
-  progress = FALSE, min_agreement = 0, mismatch_rate = 0,
+  progress = FALSE, min_agreement = 0, mismatch_rate = 0.1,
   detect_unknown = TRUE, covariate_col = "tissue"
 )
 stopifnot(
@@ -144,14 +135,13 @@ stopifnot(
             "categorical"),
   setequal(covariate_result$covariate_adjustment$covariates$tissue$levels,
            c("tissue_a", "tissue_b")),
-  nrow(covariate_result$predictions) == nrow(covariate_meta),
-  identical(covariate_result$calibration$covariate_method, "residualize")
+  nrow(covariate_result$predictions) == nrow(covariate_meta)
 )
 set.seed(46)
 both_covariate_result <- synthetic$check_annotations(
   t(both_covariates$X), as.data.frame(both_covariates$meta),
   "sample", "label_observed", progress = FALSE, min_agreement = 0,
-  mismatch_rate = 0, detect_unknown = TRUE,
+  mismatch_rate = 0.1, detect_unknown = TRUE,
   covariate_col = c("tissue", "time")
 )
 stopifnot(
@@ -183,8 +173,7 @@ stopifnot(inherits(try(synthetic$check_annotations(
 ), silent = TRUE), "try-error"))
 stopifnot(inherits(try(synthetic$check_annotations(
   t(generated$X), as.data.frame(generated$meta), "sample", "label_observed",
-  progress = FALSE, detect_unknown = TRUE,
-  unknown_threshold_method = "not_a_method"
+  progress = FALSE, mismatch_rate = 0
 ), silent = TRUE), "try-error"))
 stopifnot(inherits(try(synthetic$simulate_dataset(
   "gaussian", 0.2, 0, 0, n_per_label = 6,

@@ -21,17 +21,13 @@
 #   rescore_unknown TRUE with combine=TRUE to score saved dirty results again
 #   subset     data.table expression on the scenario parameters, e.g. "rep == 1"
 #   scenarios  R expression for scenario numbers, e.g. 1:20
-#   cv_folds, mismatch_repeats, mismatch_rate, target_specificity, margin_coverage,
-#   holdout_reference, unknown_threshold_method
+#   cv_folds, mismatch_repeats, mismatch_rate, target_specificity, margin_coverage
 #              comma-separated values to compare; every combination is run, e.g.
 #              cv_folds=5,loo mismatch_repeats=1,3 target_specificity=0.9,0.95,0.99
 #              margin_coverage=0.01,0.025,0.05
 #              mismatch_rate=0.1,held_out
-#              holdout_reference=all_alternatives,top
 #              ("loo" = leave-one-out). Defaults: 5, 3, 0.95, 0.025
 #   detect_unknown TRUE/FALSE; comma-separated values to compare (default FALSE)
-#   unknown_threshold_method simulated,mad,knn,global_mahalanobis,pca_residual
-#              (default simulated)
 #   covariate_col comma-separated metadata columns to residualize
 #              (default none; synthetic data expose batch,time)
 #   force      TRUE to recompute scenarios that already have a row file
@@ -59,9 +55,7 @@ opt <- list(input = "simulations/results/simulated_datasets_v2.rds",
             combine = "FALSE", rescore_unknown = "FALSE",
             cv_folds = "5", mismatch_repeats = "3", target_specificity = "0.95",
             margin_coverage = "0.025", mismatch_rate = "0.1",
-            holdout_reference = "all_alternatives",
             detect_unknown = "FALSE",
-            unknown_threshold_method = "simulated",
             covariate_col = "",
             min_agreement = "0", force = "FALSE")
 for (a in args[grepl("=", args)]) {
@@ -81,38 +75,24 @@ numeric_rates <- suppressWarnings(as.numeric(mismatch_rates))
 if (!length(mismatch_rates) || any(!nzchar(mismatch_rates)) ||
     any(mismatch_rates != "held_out" &
         (is.na(numeric_rates) | !is.finite(numeric_rates) |
-         numeric_rates < 0 | numeric_rates > 1))) {
-  stop('mismatch_rate must contain "held_out" or numbers between 0 and 1.')
+         numeric_rates <= 0 | numeric_rates > 1))) {
+  stop('mismatch_rate must contain "held_out" or numbers greater than 0 and at most 1.')
 }
 mismatch_rates[mismatch_rates != "held_out"] <-
   as.character(numeric_rates[mismatch_rates != "held_out"])
-unknown_methods <- as_vals(opt$unknown_threshold_method)
-allowed_unknown_methods <- c("simulated", "mad", "knn",
-                             "global_mahalanobis", "pca_residual")
-if (!length(unknown_methods) || any(!nzchar(unknown_methods)) ||
-    any(!unknown_methods %in% allowed_unknown_methods)) {
-  stop("unknown_threshold_method must contain one or more of: ",
-       paste(allowed_unknown_methods, collapse = ", "))
-}
 configs <- CJ(cv_folds = as_vals(opt$cv_folds),
               mismatch_repeats = as.integer(as_vals(opt$mismatch_repeats)),
               mismatch_rate = unique(mismatch_rates),
               target_specificity = as.numeric(as_vals(opt$target_specificity)),
               margin_coverage = as.numeric(as_vals(opt$margin_coverage)),
-              holdout_reference = as_vals(opt$holdout_reference),
               detect_unknown = as.logical(as_vals(opt$detect_unknown)),
-              unknown_threshold_method = unknown_methods,
               sorted = FALSE)
 # The suffix distinguishes dual calibration and verdicts from historical runs.
-configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s%s%s_dualcal_simspec_corrcal_nogeneral_verdict10", cv_folds, mismatch_repeats,
-                         target_specificity,
+configs[, cfg := sprintf("cv%s_mr%d_ts%s%s%s%s",
+                         cv_folds, mismatch_repeats, target_specificity,
                          ifelse(mismatch_rate == "0.1", "", paste0("_swap", mismatch_rate)),
                          ifelse(margin_coverage == 0.025, "", paste0("_mc", margin_coverage)),
-                         ifelse(holdout_reference == "all_alternatives", "",
-                                paste0("_hr", holdout_reference)),
-                    ifelse(detect_unknown, "_du", ""),
-                    ifelse(unknown_threshold_method == "simulated", "",
-                           paste0("_um", unknown_threshold_method)))])
+                         ifelse(detect_unknown, "_du", ""))]
 if (nzchar(opt$covariate_col)) {
   covariate_suffix <- gsub("[^A-Za-z0-9]+", "-", opt$covariate_col)
   configs[, cfg := paste0(cfg, "_cov", covariate_suffix)]
@@ -134,8 +114,9 @@ ratio <- function(a, b) if (b > 0) a / b else NA_real_
 or_na <- function(x) if (is.null(x) || !length(x)) NA_real_ else x
 all_statuses <- c("insufficient_evidence", "potential_unknown_individual",
                   "suspicious_with_candidate_correction",
-                  "suspicious_without_reliable_alternative", "no_confident_prediction",
-                  "weak_disagreement", "no_evidence_of_incorrect_annotation")
+                  "suspicious_without_reliable_alternative",
+                  "weak_disagreement",
+                  "no_evidence_of_incorrect_annotation")
 
 score_scenario <- function(r, meta, seconds, detect_unknown) {
   p <- r$predictions
@@ -154,7 +135,6 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
   rep_m <- r$performance$misannotation_detection
   perf <- r$performance
   det <- rep_m
-  all_alt <- perf$all_alternatives_detection
   corr_v <- perf$correction_validation
   rec_true <- ratio(sum(p$predicted_id[bad] == truth[bad]), sum(bad))
   correction_reference <- (bad | p$predicted_id != p$observed_id) &
@@ -204,9 +184,6 @@ score_scenario <- function(r, meta, seconds, detect_unknown) {
     n_repeats_validated = or_na(det$n_repeats_validated),
     sens_in_sample = or_na(det$sensitivity_in_sample),
     sens_sd = or_na(det$sensitivity_sd),
-    sens_all_alt = or_na(all_alt$sensitivity),
-    spec_all_alt = or_na(all_alt$specificity),
-    sens_all_alt_gap = or_na(all_alt$sensitivity) - sens,
     # recovery on the truly misannotated samples: reported (simulated swaps)
     # versus true
     recovery_true_misid = rec_true,
@@ -257,13 +234,11 @@ run_config <- function(sim, id, cfg, meta, X, md) {
   }
   check_args <- list(detect_unknown = cfg$detect_unknown, mismatch_rate = rate,
                      min_agreement = as.numeric(opt$min_agreement),
-                     unknown_threshold_method = cfg$unknown_threshold_method,
                      covariate_col = covariate_col)
   args <- c(list(expr = X, metadata = md, sample_col = "sample", id_col = "label",
                  cv_folds = folds, progress = FALSE,
                  mismatch_repeats = cfg$mismatch_repeats,
                  margin_coverage = cfg$margin_coverage,
-                 holdout_reference = cfg$holdout_reference,
                  target_specificity = cfg$target_specificity), check_args)
   r <- tryCatch(
     withCallingHandlers(do.call(check_annotations, args),

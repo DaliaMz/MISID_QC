@@ -38,9 +38,6 @@ utils::globalVariables(c("x", "y", "rate", "metric", "group", "held"))
   top <- cbind(seq_len(nrow(scores)), max.col(scores, ties.method = "first"))
   margins <- scores[top] - scores
   margins[top] <- NA_real_
-  if (identical(result$calibration$holdout_reference, "top")) {
-    return(apply(margins, 1L, min, na.rm = TRUE))
-  }
   as.vector(margins[!is.na(margins)])
 }
 
@@ -82,13 +79,7 @@ utils::globalVariables(c("x", "y", "rate", "metric", "group", "held"))
     }
     mean(x > cutoff)
   }
-  source <- if (identical(det$source, "simulated_swaps_cross_fitted")) {
-    paste0("Cross-simulation (", det$n_repeats_validated, " held-out repeats)")
-  } else if (identical(det$source, "simulated_swaps_in_sample")) {
-    "In-sample verdict rates (cross-fitting unavailable)"
-  } else {
-    "All-alternatives diagnostic (simulated swaps unavailable)"
-  }
+  source <- "In-sample simulated-swap verdict rates"
   c(
     sprintf("Detection targets: sensitivity 80%%; specificity %s.",
             pct(result$thresholds$target_specificity)),
@@ -221,8 +212,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     ggplot2::labs(title = "Final sample statuses", x = NULL, y = "Samples",
                   caption = "Unknown flags are separate and may overlap.") + theme
   flagged <- which((!is.na(p$suspicious) & p$suspicious) |
-                     (!is.na(p$potential_unknown_individual) & p$potential_unknown_individual) |
-                     p$annotation_status == "insufficient_evidence")
+                     (!is.na(p$potential_unknown_individual) & p$potential_unknown_individual))
   calls <- p[head(flagged, 6L), , drop = FALSE]
   call_lines <- if (!nrow(calls)) "No samples require inspection." else {
     paste(calls$sample_id, "| observed:", calls$observed_id,
@@ -244,6 +234,9 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
             verdict("identity_recovery"), pct(result$calibration$correction_margin$accuracy),
             num(result$calibration$correction_margin$n_retained),
             num(result$thresholds$correction_margin)),
+    sprintf("Correction gate: %s",
+            if (!is.null(result$correction_gate)) result$correction_gate$reason
+            else "Correction gate result unavailable."),
     sprintf("Unknown: %s | sensitivity %s | specificity %s",
             verdict("unknown_individual_detection"),
             pct(result$performance$unknown_individual_detection$sensitivity),
@@ -271,8 +264,8 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     holdout_density <- ggplot2::ggplot(d, ggplot2::aes(x = x)) +
       ggplot2::geom_density(fill = "#8bc2d7", colour = "#27658b", alpha = 0.5) +
       ggplot2::labs(title = "2. Holdout cutoff calibration",
-                    subtitle = sprintf("Agreements with observed labels; %s reference; n = %d margins",
-                                       result$calibration$holdout_reference, nrow(d)),
+                    subtitle = sprintf("Agreements with observed labels; all-alternative reference; n = %d margins",
+                                       nrow(d)),
                     x = "Reference margin", y = "Density",
                     caption = paste("Dashed = cutoff", num(threshold))) + theme
     holdout_density <- cutoff_line(holdout_density, threshold)
@@ -412,12 +405,7 @@ annotation_report <- function(result, file = "annotation_report.pdf") {
     empty("Final unknown scores", "Unknown detection was disabled")
   } else histogram(final$unknown_detection_score, unknown$threshold,
                    "Final unknown scores", paste("Unavailable scores:", sum(!is.finite(p$unknown_detection_score))),
-                   switch(unknown$statistic,
-                          top_margin = "Top margin",
-                          nearest_training_distance = "Nearest-training distance",
-                          global_mahalanobis = "Global Mahalanobis distance",
-                          pca_reconstruction_residual = "PCA reconstruction residual",
-                          "Nearest-class distance"))
+                   "Nearest-class distance")
   draw_page(list(real_holdout, real_detection, real_recovery, real_unknown), 2, 2)
   invisible(file)
 }

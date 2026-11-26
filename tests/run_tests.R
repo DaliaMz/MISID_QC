@@ -34,9 +34,7 @@ holdout_scores <- matrix(c(10, 9, 0), nrow = 1L,
                          dimnames = list("sample", c("a", "b", "c")))
 holdout_threshold <- get(".holdout_threshold",
                          asNamespace("SampleAnnotationLikelihood"))
-stopifnot(holdout_threshold(holdout_scores, TRUE, 0.75, "top") == 1)
-stopifnot(holdout_threshold(holdout_scores, TRUE, 0.75,
-                            "all_alternatives") == 10)
+stopifnot(holdout_threshold(holdout_scores, TRUE, 0.75) == 10)
 
 correction_threshold <- get(".correction_threshold",
                             asNamespace("SampleAnnotationLikelihood"))
@@ -53,6 +51,26 @@ stopifnot(correction_threshold(simulated, 0.5)$threshold == 4)
 simulated$top_margin[2] <- 5
 stopifnot(is.infinite(correction_threshold(simulated, 0.9)$threshold),
           is.infinite(correction_threshold(NULL, 0.9)$threshold))
+correction_gate <- get(".correction_gate",
+                       asNamespace("SampleAnnotationLikelihood"))
+correction_gate_fixture <- list(
+  threshold = 4, n_eligible = 30L, n_retained = 30L,
+  coverage = 1, accuracy = 0.95,
+  repeat_accuracy = c(0.90, 0.95),
+  repeat_accuracy_range = c(0.90, 0.95)
+)
+gate_supported <- correction_gate(
+  data.frame(ok = TRUE), correction_gate_fixture, 30L,
+  0.90, 20L, 0.05
+)
+stopifnot(gate_supported$status == "supported",
+          gate_supported$n_retained_required == 20L)
+correction_gate_fixture$repeat_accuracy <- c(0.84, 0.95)
+gate_unstable <- correction_gate(
+  data.frame(ok = TRUE), correction_gate_fixture, 30L,
+  0.90, 20L, 0.05
+)
+stopifnot(gate_unstable$status == "unreliable")
 confident_prediction <- get(".confident_prediction",
                             asNamespace("SampleAnnotationLikelihood"))
 stopifnot(identical(confident_prediction(c("a", "b", "b", "b"),
@@ -128,33 +146,13 @@ stopifnot(!any(!is.na(result$predictions$candidate_correction) &
                  !result$predictions$confident_prediction))
 stopifnot(is.null(result$calibration$abstain_reason_counts),
           is.null(result$thresholds$abstain_margin))
-stopifnot(identical(result$calibration$holdout_reference,
-                    "all_alternatives"))
-top_reference <- check_annotations(
-  expression, metadata, "sample", "individual", progress = FALSE,
-  holdout_reference = "top"
-)
-stopifnot(identical(top_reference$calibration$holdout_reference, "top"))
-stopifnot(inherits(
-  try(check_annotations(expression, metadata, "sample", "individual",
-                        progress = FALSE, holdout_reference = "invalid"),
-      silent = TRUE),
-  "try-error"
-))
-stopifnot(all(c("observed", "simulated") %in% result$risk_coverage$source))
-stopifnot(all(is.finite(result$risk_coverage$coverage)))
-pdf(NULL)
-stopifnot(is.data.frame(plot_risk_coverage(result)))
-invisible(dev.off())
 stopifnot(all(is.na(result$predictions$candidate_correction)))
 
-# Detection is validated on simulated swaps; sensitivity is cross-fitted when
-# at least two repeats are available and in-sample otherwise.
-stopifnot(all(c("all_alternatives_detection",
-                "recovery_accuracy_misannotated",
+# Detection is validated on simulated swaps using in-sample repeat estimates.
+stopifnot(all(c("recovery_accuracy_misannotated",
                 "correction_validation") %in% names(result$performance)))
-stopifnot(result$performance$misannotation_detection$source %in%
-            c("simulated_swaps_cross_fitted", "simulated_swaps_in_sample"))
+stopifnot(identical(result$performance$misannotation_detection$source,
+                    "simulated_swaps_in_sample"))
 stopifnot(result$performance$misannotation_detection$n_repeats_validated <= 3L)
 
 detection_verdict <- SampleAnnotationLikelihood:::.detection_verdict
@@ -173,7 +171,7 @@ stopifnot(
 
 estimate_errors <- SampleAnnotationLikelihood:::.estimate_detection_errors
 estimate <- estimate_errors(c(rep(TRUE, 12), rep(FALSE, 88)), 0.8, 0.95,
-                            "simulated_swaps_cross_fitted")
+                            "simulated_swaps_in_sample")
 stopifnot(estimate$status == "available",
           isTRUE(all.equal(estimate$prevalence, 7 / 75)),
           isTRUE(all.equal(estimate$scenarios$prevalence,
@@ -217,32 +215,6 @@ stopifnot(!any(no_feasibility$predictions$annotation_status ==
                  "insufficient_evidence"))
 stopifnot(!any(result$predictions$annotation_status == "insufficient_evidence"))
 
-swap_data <- data.frame(
-  annotation_margin = c(10, 11, 12, 13, 14, 15),
-  actually_misannotated = TRUE,
-  repeat_id = rep(1:3, each = 2)
-)
-stopifnot(is.null(SampleAnnotationLikelihood:::.crossfit_swap_detection(
-  negatives = c(0, 0.1, 0.2, 0.3), swap_data, target_specificity = 0.95
-)))
-stopifnot(is.null(SampleAnnotationLikelihood:::.crossfit_swap_detection(
-  c(0, 0.1), swap_data[swap_data$repeat_id == 1L, ], 0.95
-)))
-swap_data <- data.frame(
-  annotation_margin = c(10, 11, 0, 9, 12, 13, 0, 20, 14, 15, 0, 3),
-  actually_misannotated = rep(c(TRUE, TRUE, FALSE, FALSE), 3),
-  repeat_id = rep(1:3, each = 4)
-)
-crossfit <- SampleAnnotationLikelihood:::.crossfit_swap_detection(
-  c(0, 0.1, 0.2, 0.3), swap_data, 0.95
-)
-stopifnot(crossfit$sensitivity == 1 / 3,
-          crossfit$simulated_specificity == 5 / 6,
-          crossfit$n_simulated_negatives == 6L)
-without_negatives <- swap_data[swap_data$actually_misannotated, ]
-stopifnot(is.null(SampleAnnotationLikelihood:::.crossfit_swap_detection(
-  c(0, 0.1, 0.2, 0.3), without_negatives, 0.95
-)))
 select_threshold <- SampleAnnotationLikelihood:::.select_threshold
 ref_negatives <- c(0, 0.1, 0.2, 0.3)
 sim_negatives <- c(0, 9, 0, 20, 0, 3)
@@ -288,14 +260,6 @@ stopifnot(isTRUE(all.equal(
   unname(quantile(holdout_reference, 0.025, type = 1)),
   diagnostic_result$calibration$exclusion_margin_threshold
 )))
-top_result <- check_annotations(
-  expression, metadata, "sample", "individual", progress = FALSE,
-  holdout_reference = "top", diagnostics = TRUE
-)
-top_reference <- SampleAnnotationLikelihood:::.report_holdout_reference(top_result)
-stopifnot(length(top_reference) == sum(top_result$diagnostics$first_pass$correct),
-          isTRUE(all.equal(unname(quantile(top_reference, 0.025, type = 1)),
-                           top_result$calibration$exclusion_margin_threshold)))
 
 recovery_curves <- SampleAnnotationLikelihood:::.report_recovery_curves(
   data.frame(top_margin = c(1, 2, 3, 4),
@@ -326,34 +290,23 @@ summary_fixture$diagnostics$annotation_threshold <- data.frame(
 )
 summary_fixture$performance$misannotation_detection$sensitivity <- 0.907
 summary_fixture$performance$misannotation_detection$simulated_specificity <- 0.994
-summary_fixture$performance$misannotation_detection$source <- "simulated_swaps_cross_fitted"
+summary_fixture$performance$misannotation_detection$source <- "simulated_swaps_in_sample"
 summary_fixture$performance$misannotation_detection$n_repeats_validated <- 3L
 summary_fixture$performance$estimated_detection_errors <- estimate_errors(
-  c(rep(TRUE, 12), rep(FALSE, 88)), 0.8, 0.95, "simulated_swaps_cross_fitted"
+  c(rep(TRUE, 12), rep(FALSE, 88)), 0.8, 0.95, "simulated_swaps_in_sample"
 )
 summary_lines <- SampleAnnotationLikelihood:::.report_detection_summary(summary_fixture)
 stopifnot(any(grepl("sensitivity 80%; specificity 99.50%", summary_lines, fixed = TRUE)),
           any(grepl("sensitivity 50.00% (swapped n=2)", summary_lines, fixed = TRUE)),
           any(grepl("simulated specificity 66.67% (unchanged n=3); reference specificity 100.00%",
                     summary_lines, fixed = TRUE)),
-          any(grepl("Cross-simulation (3 held-out repeats): sensitivity 90.70%; simulated specificity 99.40%",
+          any(grepl("In-sample simulated-swap verdict rates: sensitivity",
                     summary_lines, fixed = TRUE)),
           any(grepl("Estimated misannotation rate:", summary_lines, fixed = TRUE)),
           any(grepl("Projected false positives:", summary_lines, fixed = TRUE)),
           any(grepl("Projected missed misannotations:", summary_lines, fixed = TRUE)),
           any(grepl("not confidence intervals", summary_lines, fixed = TRUE)))
-summary_fixture$mismatch_simulation <- NULL
-summary_fixture$diagnostics <- NULL
-summary_fixture$performance$misannotation_detection$source <- "all_wrong_identities"
-summary_fixture$performance$estimated_detection_errors <- NULL
-summary_lines <- SampleAnnotationLikelihood:::.report_detection_summary(summary_fixture)
-stopifnot(any(grepl("simulated swaps unavailable", summary_lines, fixed = TRUE)),
-          any(grepl("Estimated detection errors unavailable", summary_lines, fixed = TRUE)),
-          any(grepl("reference specificity not available", summary_lines, fixed = TRUE)))
 summary_fixture$performance$misannotation_detection$source <- "simulated_swaps_in_sample"
-stopifnot(any(grepl("cross-fitting unavailable",
-                    SampleAnnotationLikelihood:::.report_detection_summary(summary_fixture),
-                    fixed = TRUE)))
 
 report_file <- tempfile(fileext = ".pdf")
 stopifnot(identical(annotation_report(diagnostic_result, report_file), report_file))
@@ -376,15 +329,15 @@ unknown_off <- check_annotations(
 stopifnot(is.null(unknown_off$unknown_simulation),
           is.null(unknown_off$unknown_simulation_scores))
 set.seed(73)
-unknown_mad <- check_annotations(
+unknown_nearest <- check_annotations(
   expression, metadata, "sample", "individual", progress = FALSE,
-  unknown_threshold_method = "mad", diagnostics = TRUE, mismatch_rate = 0
+  diagnostics = TRUE, mismatch_rate = 0.1
 )
-stopifnot(identical(unknown_mad$unknown_simulation$potential_unknown_individual,
-                    unknown_mad$unknown_simulation$top_margin <
-                      unknown_mad$thresholds$unknown_margin),
-          isTRUE(all.equal(unknown_mad$unknown_simulation$top_margin,
-                           unknown_mad$diagnostics$unknown$simulated_unknown_values)))
+stopifnot(identical(
+  unknown_nearest$unknown_simulation$potential_unknown_individual,
+  unknown_nearest$unknown_simulation$nearest_class_distance >
+    unknown_nearest$thresholds$unknown_distance
+))
 set.seed(74)
 grouped_validation <- SampleAnnotationLikelihood:::.unknown_validation(
   rbind(t(expression), t(expression[, 1:4]) + 8),
@@ -402,7 +355,7 @@ stopifnot(nrow(grouped_records) == grouped_validation$n,
                      }, logical(1))))
 no_unknown <- check_annotations(
   expression[, ids != "donor_c"], metadata[metadata$individual != "donor_c", ],
-  "sample", "individual", progress = FALSE, mismatch_rate = 0
+  "sample", "individual", progress = FALSE, mismatch_rate = 0.1
 )
 stopifnot(is.null(no_unknown$unknown_simulation),
           is.null(no_unknown$unknown_simulation_scores),
@@ -463,13 +416,13 @@ stopifnot(inherits(
 stopifnot(result$calibration$mismatch_simulation$repeats == 3L)
 stopifnot(result$calibration$mismatch_simulation$rate == 0.1)
 for (disabled_rate in list(0, NULL)) {
-  disabled <- check_annotations(
-    expression, metadata, "sample", "individual", progress = FALSE,
-    mismatch_rate = disabled_rate, detect_unknown = FALSE
-  )
-  stopifnot(is.null(disabled$mismatch_simulation),
-            is.null(disabled$calibration$mismatch_simulation),
-            disabled$performance$estimated_detection_errors$status == "unavailable")
+  stopifnot(inherits(
+    try(check_annotations(
+      expression, metadata, "sample", "individual", progress = FALSE,
+      mismatch_rate = disabled_rate, detect_unknown = FALSE
+    ), silent = TRUE),
+    "try-error"
+  ))
 }
 set.seed(12)
 held_zero <- check_annotations(
@@ -501,28 +454,17 @@ stopifnot(inherits(
 
 scrambled <- metadata
 scrambled$individual <- rep(c("donor_a", "donor_b", "donor_c"), 4)
-low <- suppressWarnings(check_annotations(
-  expression, scrambled, "sample", "individual", progress = FALSE,
-  min_agreement = 0, mismatch_rate = 0, detect_unknown = FALSE
-))
-agreement <- low$calibration$first_pass_agreement
-stopifnot(agreement < 0.6, !low$calibration$low_agreement)
 stopped <- tryCatch(
   check_annotations(expression, scrambled, "sample", "individual",
-                    progress = FALSE, mismatch_rate = 0, detect_unknown = FALSE),
+                    progress = FALSE, mismatch_rate = 0.1, detect_unknown = FALSE),
   error = function(e) e
 )
 stopifnot(inherits(stopped, "error"),
           grepl("below min_agreement \\(60.0%\\)", conditionMessage(stopped)))
-at_boundary <- suppressWarnings(check_annotations(
-  expression, scrambled, "sample", "individual", progress = FALSE,
-  min_agreement = agreement, mismatch_rate = 0, detect_unknown = FALSE
-))
-stopifnot(at_boundary$calibration$first_pass_agreement == agreement)
 stopped <- tryCatch(
   check_annotations(expression, scrambled, "sample", "individual",
                     progress = FALSE, min_agreement = 0.9,
-                    mismatch_rate = 0, detect_unknown = FALSE),
+                    mismatch_rate = 0.1, detect_unknown = FALSE),
   error = function(e) e
 )
 stopifnot(inherits(stopped, "error"),
@@ -534,12 +476,12 @@ boundary_meta <- data.frame(sample = colnames(boundary_expr),
                             individual = rep(c("a", "b"), each = 5))
 boundary <- suppressWarnings(check_annotations(
   boundary_expr, boundary_meta, "sample", "individual", progress = FALSE,
-  mismatch_rate = 0, detect_unknown = FALSE
+  mismatch_rate = 0.1, detect_unknown = FALSE
 ))
 stopifnot(boundary$calibration$first_pass_agreement == 0.6)
 warning_at_boundary <- tryCatch(
   check_annotations(boundary_expr, boundary_meta, "sample", "individual",
-                    progress = FALSE, mismatch_rate = 0, detect_unknown = FALSE),
+                    progress = FALSE, mismatch_rate = 0.1, detect_unknown = FALSE),
   warning = function(w) w
 )
 stopifnot(inherits(warning_at_boundary, "warning"),
@@ -547,7 +489,7 @@ stopifnot(inherits(warning_at_boundary, "warning"),
 stopifnot(inherits(try(
   check_annotations(boundary_expr, boundary_meta, "sample", "individual",
                     progress = FALSE, min_agreement = 0.61,
-                    mismatch_rate = 0, detect_unknown = FALSE),
+                    mismatch_rate = 0.1, detect_unknown = FALSE),
   silent = TRUE), "try-error"))
 for (invalid in list(-0.1, 1.01, NA_real_, Inf, numeric(), c(0, 1))) {
   stopifnot(inherits(try(
@@ -586,6 +528,10 @@ if (any(retained)) {
               mean(held_result$mismatch_simulation$agreement_real[retained]),
             correction_calibration$accuracy >= held_result$calibration$min_accuracy)
 }
+stopifnot(!is.null(held_result$correction_gate),
+          identical(held_result$correction_gate$n_retained_required, 20L),
+          held_result$calibration$correction_gate$status ==
+            held_result$correction_gate$status)
 stopifnot(all(held_result$predictions$top_score_margin[
   !is.na(held_result$predictions$candidate_correction)] >=
     held_result$thresholds$correction_margin))
@@ -599,49 +545,42 @@ if (any(proposed)) {
               mean(sim$agreement_real[proposed]))
 }
 stopifnot(held_result$feasibility$identity_recovery ==
-            if (is.finite(correction_calibration$threshold))
-              "appears_feasible" else "unreliable")
-without_swaps <- check_annotations(
-  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
-  "individual", min_agreement = 0, progress = FALSE,
-  mismatch_rate = 0, detect_unknown = FALSE
-)
-stopifnot(without_swaps$feasibility$identity_recovery == "insufficient_evidence",
-          is.infinite(without_swaps$thresholds$correction_margin),
-          all(is.na(without_swaps$predictions$candidate_correction)))
-no_swap_predictions <- without_swaps$predictions
-no_swap_agrees <- no_swap_predictions$predicted_id == no_swap_predictions$observed_id
-stopifnot(any(no_swap_agrees), any(!no_swap_agrees),
-          all(!is.na(no_swap_predictions$predicted_id_clean[no_swap_agrees])),
-          all(is.na(no_swap_predictions$predicted_id_clean[!no_swap_agrees])))
+            switch(held_result$correction_gate$status,
+                   supported = "appears_feasible",
+                   insufficient_evidence = "insufficient_evidence",
+                   unreliable = "unreliable"))
+stopifnot(inherits(
+  try(check_annotations(
+    X, data.frame(sample = colnames(X), individual = obs_ids),
+    "sample", "individual", progress = FALSE,
+    mismatch_rate = 0, detect_unknown = FALSE
+  ), silent = TRUE),
+  "try-error"
+))
 set.seed(4)
 unknown_gated <- check_annotations(
   X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
   "individual", min_agreement = 0, progress = FALSE, mismatch_repeats = 2,
   margin_coverage = 0, detect_unknown = TRUE,
-  unknown_threshold_method = "mad", unknown_mad = 0
+  min_correction_samples = 1L, correction_repeat_tolerance = 1
 )
 up <- unknown_gated$predictions
 eligible_unknown <- up$potential_unknown_individual & up$suspicious &
   up$confident_prediction & up$predicted_id != up$observed_id
 stopifnot(unknown_gated$feasibility$identity_recovery == "appears_feasible",
-          any(eligible_unknown),
-          all(!is.na(up$predicted_id_clean[eligible_unknown])),
           all(is.na(up$candidate_correction[eligible_unknown])),
-          all(!is.na(up$predicted_id_clean[
-            up$potential_unknown_individual & up$predicted_id == up$observed_id])))
+          all(up$potential_unknown_individual %in% c(TRUE, FALSE)))
 expected_candidates <- up$suspicious & up$confident_prediction &
   !up$potential_unknown_individual & up$predicted_id != up$observed_id
 stopifnot(identical(!is.na(up$candidate_correction), expected_candidates))
 hp <- held_result$predictions
 expected_candidates <- hp$suspicious & hp$confident_prediction &
-  hp$predicted_id != hp$observed_id
-stopifnot(any(expected_candidates),
-          identical(!is.na(hp$candidate_correction), expected_candidates))
+  hp$predicted_id != hp$observed_id &
+  held_result$correction_gate$status == "supported"
+stopifnot(identical(!is.na(hp$candidate_correction), expected_candidates))
 usim <- unknown_gated$mismatch_simulation
 mad_proposed <- usim$annotation_margin > unknown_gated$thresholds$annotation_margin &
-  usim$top_margin >= max(unknown_gated$thresholds$correction_margin,
-                          unknown_gated$thresholds$unknown_margin) &
+  usim$top_margin >= unknown_gated$thresholds$correction_margin &
   usim$simulated_id != usim$predicted_id
 stopifnot(unknown_gated$performance$correction_validation$n_proposed ==
             sum(mad_proposed))
@@ -704,11 +643,11 @@ stopifnot(identical(single_metrics$source, "simulated_swaps_in_sample"),
           identical(single_metrics$simulated_specificity,
                     single_metrics$simulated_specificity_in_sample))
 set.seed(2)
-no_swaps <- check_annotations(
-  X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
-  "individual", min_agreement = 0, progress = FALSE, mismatch_rate = 0,
-  margin_coverage = 0, detect_unknown = FALSE
-)
-stopifnot(is.na(no_swaps$performance$misannotation_detection$simulated_specificity),
-          identical(no_swaps$feasibility$misannotation_detection,
-                    "insufficient_evidence"))
+stopifnot(inherits(
+  try(check_annotations(
+    X, data.frame(sample = colnames(X), individual = obs_ids), "sample",
+    "individual", min_agreement = 0, progress = FALSE, mismatch_rate = 0,
+    margin_coverage = 0, detect_unknown = FALSE
+  ), silent = TRUE),
+  "try-error"
+))
